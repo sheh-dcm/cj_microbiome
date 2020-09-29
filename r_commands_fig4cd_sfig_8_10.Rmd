@@ -1,0 +1,373 @@
+---
+title: "Common Marmoset Gut Microbiome Profiles in Health and Intestinal Disease"
+author: "Alex Sheh"
+date: "September 21, 2020"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# This is the 3rd part of the RNAseq analysis picking up after FASTQ files were processed and aligned
+## We load rdata file with the feature counts and libraries.
+
+```{r libraries}
+load("ibd_cj_feature_counts.RData")
+load("ibd_hs_feature_counts.RData")
+
+# for ML algorithms
+library(Rsubread)
+library(edgeR)
+library(gplots)
+library(org.Hs.eg.db)
+library(AnnotationDbi)
+library(GO.db)
+library(mygene)
+library(topGO)
+data("geneList")
+library(Rgraphviz)
+library(ggplot2)
+library(colorspace)
+library(ggVennDiagram)
+
+sessionInfo()
+
+```
+
+```{r function getgeneid, results="hide", warning=FALSE}
+##########function getgeneid
+getgeneid<-function(strGO,isde){
+  require(org.Hs.eg.db)
+  require(mygene)
+  require(AnnotationDbi)
+  x <- org.Hs.egGO2ALLEGS
+  Rkeys(x) <- strGO
+  EG <- mappedLkeys(x)
+  
+  is.deh.keep<-isde@.Data!=0
+  is.deh.kept <- as.matrix(isde[is.deh.keep])
+  rnames <-rownames(isde)
+  rnames <- rnames[is.deh.keep]
+  rownames(is.deh.kept)<-rnames
+  isde_GO <- intersect(EG, rownames(is.deh.kept))
+  GOI<-as.matrix(is.deh.kept[isde_GO,])
+  return(getGenes(rownames(GOI), fields = c("symbol","name","summary")))
+}
+```
+# Compare IBD cases
+## Supplementary Figure 8a
+
+```{r group IBD samples, results="hide", warning=FALSE}
+
+#tabulate
+ibd <- cbind(fc_2$counts, fc_4$counts, fc_8$counts, fc_6$counts, fc_10$counts, fc_15$counts)
+#write.table(ibd, file="20200824_ibd_3v3_raw_feature_counts.txt")
+g_ibd <- c("ibd","ibd","ibd","non_ibd","non_ibd","non_ibd")
+#trim lowly expressed exons
+y <- DGEList(counts = ibd[,1:6], group = g_ibd)
+
+#counts per million have to have counts greater than X per million 
+# and be found in at least Y samples
+cpm(10, mean(y$samples$lib.size))
+#this value is used in the rowsum inequality
+keep <-rowSums(cpm(y)>2) >= 2
+y <- y[keep,]
+
+#TMM normalization
+y.norm <-calcNormFactors(y, method = "TMM")
+y.norm$samples
+
+# #plot MA plot - mean and difference plot based on the first sample.
+# plotMD(cpm(y.norm, log=TRUE), column=1)
+# abline(h=0, col="red", lty=2, lwd=2)
+
+#data exploration of dataset
+plotMDS(y.norm,pch = c(15,15,15,17,17,17), col = c("blue", "blue","blue", "red","red","red"))
+legend("topright", legend=c("ibd", "non_ibd"), pch=c(15,17), col=c("blue","red"), ncol=2)
+# dev.copy(png, paste0("ibd_3v3_plotMDS.png"))
+# dev.off()
+```
+
+# Ordination of IBD data in the jejunum
+## After evaluating PCA we decided to exclude one sample for subsequent analysis 
+## Supplementary Figure 8b
+```{r without outlier sample, results="hide", warning=FALSE}
+#tabulate without sample 2
+ibd2 <- cbind(fc_4$counts, fc_8$counts, fc_6$counts, fc_10$counts, fc_15$counts)
+g_ibd2 <- c("ibd","ibd","non_ibd","non_ibd","non_ibd")
+
+#trim lowly expressed exons
+y2 <- DGEList(counts = ibd2[,1:5], group = g_ibd2)
+
+#counts per million have to have counts greater than X per million 
+#and be found in at least Y samples
+cpm(10, mean(y2$samples$lib.size))
+#this value is used in the rowsum inequality
+keep2 <-rowSums(cpm(y2)>1.6) >= 2
+y2 <- y2[keep2,]
+
+#TMM normalization
+y2.norm <-calcNormFactors(y2, method = "TMM")
+y2.norm$samples
+
+#data exploration SUPPLEMENTARY FIGURE 8b
+plotMDS(y2.norm,pch = c(15,15,17,17,17), col = c("blue","blue", "red","red","red"))
+legend("left", legend=c("ibd", "non_ibd"), pch=c(15,17), col=c("blue","red"), ncol=2)
+# dev.copy(png, paste0("ibd_3v2_plotMDS.png"))
+# dev.off()
+
+#Estimate common dispersion
+design2 <- model.matrix(~ 0 + g_ibd2)
+colnames(design2) <- c("ibd","non_ibd")
+y2.norm <- estimateCommonDisp(y2.norm, design2, verbose = TRUE, robust= TRUE)
+fit2 <- glmQLFit(y2.norm, design2, robust=TRUE)
+plotQLDisp(fit2)
+
+# outliers from the mean-NB dispersion trend. Outliers are marked by small prior.df values:
+o2 <- order(fit2$df.prior)
+y2.norm$counts[o2[1:6],] #genes tag used in the tutorial but our labels had names
+con2 <- makeContrasts(non_ibd - ibd, levels=design2)
+res2 <- glmQLFTest(fit2, contrast=con2)
+topTags(res2)
+
+is.de2 <- decideTestsDGE(res2, p.value=0.05)
+# summary(is.de2)
+# plotSmear(res2, de.tags=rownames(res2)[is.de2!=0])
+# dev.copy(png, paste0("ibd_3v2_plotsmear.png"))
+# dev.off()
+
+#supplementary table 7
+write.table(topTags(res2, n=100000)$table, file="supplementary_table_7.txt")
+
+#imposing the 1.5 fold change
+tr2 <- glmTreat(fit2, contrast = con2, lfc = log2(1.5))
+topTags(tr2)
+ 
+is.de.fc2 <- decideTestsDGE(tr2)
+summary(is.de.fc2)
+plotMD(tr2, status=is.de.fc2, values=c(1,-1), col=c("red","blue"), legend="topright")
+# dev.copy(png, paste0("ibd_3v2_plotMD15.png"))
+# dev.off()
+
+# 4C Venn diagram IBD -------------------------------------------------------------
+ibd_toptags_3v2 <- topTags(res2, n =2000, p.value = 0.05)
+ibd_toptags_3v2 <- as.data.frame(ibd_toptags_3v2[,c(1,5)])
+ibd_toptags_3v2 <- ibd_toptags_3v2[order(ibd_toptags_3v2$logFC),]
+ibd_toptags_genes_3v2 <- rownames(ibd_toptags_3v2)
+ibd_genes_3v2 <- rownames(y2.norm$pseudo.counts)
+ibd_commongenes_3v2 <- setdiff(ibd_genes_3v2,ibd_toptags_genes_3v2)
+
+ibd_toptags_3v2_up <- ibd_toptags_3v2$logFC>0
+ibd_toptags_3v2_up <- ibd_toptags_3v2[ibd_toptags_3v2_up,]
+ibd_toptags_3v2_dn <- ibd_toptags_3v2$logFC<0
+ibd_toptags_3v2_dn <- ibd_toptags_3v2[ibd_toptags_3v2_dn,]
+ibd_genes_3v2_up <-rownames(ibd_toptags_3v2_up)
+ibd_genes_3v2_dn <-rownames(ibd_toptags_3v2_dn)
+ibd_genes_3v2_com_up <-append(ibd_genes_3v2_up,ibd_commongenes_3v2)
+ibd_genes_3v2_com_dn <-append(ibd_genes_3v2_dn,ibd_commongenes_3v2)
+
+
+# draw venn
+ibd_3v2_venn <- list(NonIBD=ibd_genes_3v2_com_up, IBD=ibd_genes_3v2_com_dn)
+ibd_3v2_venn_plot <- ggVennDiagram(ibd_3v2_venn,color="black",
+                                   size=1, category.names = c("      Non-IBD", "IBD")) +
+  scale_fill_gradient(low="lightyellow",high = "red") +
+  theme(legend.position = "none")
+ibd_3v2_venn_plot
+# ggsave(
+#   "ibd_3v2_venn.png",
+#   ibd_3v2_venn_plot,
+#   width = 8.5,
+#   height = 6,
+#   dpi = 1200
+# )
+
+
+```
+```{r goana, results="hide",warning=FALSE}
+# 5 3 vs 2 ibd using annotation for GO -----------------------------------------------------
+
+#tabulate
+ibd_h2 <- cbind(fc_4h$counts, fc_8h$counts, fc_6h$counts, fc_10h$counts, fc_15h$counts)
+g_ibdh2 <- c("ibd","ibd","non_ibd","non_ibd","non_ibd")
+#trim lowly expressed exons
+yh2 <- DGEList(counts = ibd_h2[,1:5], group = g_ibdh2)
+#match symbols to numbers
+Symbol <- mapIds(org.Hs.eg.db, rownames(yh2), keytype = "ENTREZID", column="SYMBOL")
+#remove the ones that were NA
+yh2 <- yh2[!is.na(Symbol), ]
+a<-dim(yh2)
+yh2 <- yh2[1:a[1]-1, ]
+
+#counts per million have to have counts greater than X per million 
+# and be found in at least Y samples
+cpm(10, mean(yh2$samples$lib.size))
+#this value is used in the rowsum inequality
+keeph2 <-rowSums(cpm(yh2)>1.6) >= 2
+yh2 <- yh2[keeph2,]
+
+#TMM normalization
+yh2.norm <-calcNormFactors(yh2, method = "TMM")
+yh2.norm$samples
+
+#data exploration of stricture
+# plotMDS(yh2.norm, pch = c(15,15,17,17,17), col = c("blue","blue","red","red","red"))
+# legend("right", legend=c("ibd", "non_ibd"), pch=c(15,17), col=c("blue","red"), ncol=2)
+# dev.copy(png, paste0("ibd_3v2h_plotMDS.png"))
+# dev.off()
+
+#Estimate common dispersion
+design_h2 <- model.matrix(~ 0 + g_ibdh2)
+colnames(design_h2) <- c("ibd","non_ibd")
+yh2.norm <- estimateCommonDisp(yh2.norm, design_h2, verbose = TRUE, robust= TRUE)
+
+fit_h2 <- glmQLFit(yh2.norm, design_h2, robust=TRUE)
+head(fit_h2$coefficients)
+# plotQLDisp(fit_h2)
+# dev.copy(png, paste0("ibd_3v2h_plotQLDisp.png"))
+# dev.off()
+# summary(fit_h2$df.prior)
+
+# outliers from the mean-NB dispersion trend. Outliers are marked by small prior.df values:
+o_h2 <- order(fit_h2$df.prior)
+yh2.norm$counts[o_h2[1:6],] #genes tag used in the tutorial but our labels had names
+conh2 <- makeContrasts(non_ibd - ibd, levels=design_h2)
+resh2 <- glmQLFTest(fit_h2, contrast=conh2)
+topTags(resh2)
+is.deh2 <- decideTestsDGE(resh2, p.value=0.05)
+# summary(is.deh2)
+
+#imposing the 1.5 fold change
+trh2 <- glmTreat(fit_h2, contrast = conh2, lfc = log2(1.5))
+topTags(trh2)
+is.de.h2 <- decideTestsDGE(trh2)
+summary(is.de.h2)
+plotMD(trh2, status=is.de.h2, values=c(1,-1), col=c("red","blue"), legend="topright")
+# dev.copy(png, paste0("ibd_3v2h_plotMD15.png"))
+# dev.off()
+
+#using goana
+goh2 <-goana(resh2, species = "Hs", FDR = 0.05)
+# topGO(goh2, n=15)
+
+#Supplementary table 8
+topGO(goh2, n=15, sort="down")
+write.table(topGO(goh2,n=2500, sort = "down"), file = "supplementary_table_8a_IBD.txt")
+topGO(goh2, n=15, sort="up")
+write.table(topGO(goh2,n=2500, sort = "up"), file = "supplementary_table_8b_IBD.txt")
+
+topGO(goh2, n=15, sort="up", ontology = "BP")
+topGO(goh2, n=15, sort="down", ontology = "BP")
+topGO(goh2, n=15, sort="up", ontology = "CC")
+topGO(goh2, n=15, sort="down", ontology = "CC")
+topGO(goh2, n=15, sort="up", ontology = "MF")
+topGO(goh2, n=15, sort="down", ontology = "MF")
+kegh2 <- kegga(resh2, species="Hs", FDR = 0.15)
+topKEGG(kegh2, n=15, truncate=34, sort ="up")
+topKEGG(kegh2, n=15, truncate=34, sort ="down")
+
+# Table 3 Tope Gene Ontology sets in IBD and non-IBD
+write.table(topGO(goh2, n=15, sort="up", ontology = "BP"), file = "Table3_nonibd.txt")
+write.table(topGO(goh2, n=15, sort="down", ontology = "BP"), file = "Table3_IBD.txt")
+# end table 3
+
+topTagsibd_3v2h <- topTags(resh2, n=100000)$table
+#neg
+negFCibd_3v2h <- topTagsibd_3v2h[,1]<0
+neg_geneibd_3v2h <- as.numeric(topTagsibd_3v2h[,5][negFCibd_3v2h])
+names(neg_geneibd_3v2h) <-rownames(topTagsibd_3v2h)[negFCibd_3v2h]
+GOdata_negibd_3v2h <- new("topGOdata", description = "Significant GO", 
+                          ontology = "BP", allGenes = neg_geneibd_3v2h, 
+                          geneSel = topDiffGenes, nodeSize = 10, annot = annFUN.org , 
+                          mapping = "org.Hs.eg.db", ID="entrez")
+
+resultFisher_negibd_3v2h <- runTest(GOdata_negibd_3v2h, algorithm = "classic", statistic = "fisher")
+resultKS_negibd_3v2h <- runTest(GOdata_negibd_3v2h, algorithm = "classic", statistic = "ks")
+resultKS.elim_negibd_3v2h <- runTest(GOdata_negibd_3v2h, algorithm = "elim", statistic = "ks")
+allRes_negibd_3v2h <- GenTable(GOdata_negibd_3v2h, classicFisher = resultFisher_negibd_3v2h, 
+                               classicKS = resultKS_negibd_3v2h, 
+                               elimKS = resultKS.elim_negibd_3v2h, 
+                               orderBy = "classicFisher", 
+                               ranksOf = "classicFisher", topNodes = 10)
+# allRes_negibd_3v2h
+
+#Supplementary Figure 9
+showSigOfNodes(GOdata_negibd_3v2h, score(resultFisher_negibd_3v2h), 
+               firstSigNodes = 10, useInfo = 'all')
+printGraph(GOdata_negibd_3v2h, resultFisher_negibd_3v2h, firstSigNodes = 10, 
+           fn.prefix = "SuppFig9", useInfo = "all", pdfSW = TRUE)
+
+#pos
+posFCibd_3v2h <- topTagsibd_3v2h[,1]>0
+pos_geneibd_3v2h <- as.numeric(topTagsibd_3v2h[,5][posFCibd_3v2h])
+names(pos_geneibd_3v2h) <-rownames(topTagsibd_3v2h)[posFCibd_3v2h]
+GOdata_posibd_3v2h <- new("topGOdata", description = "Significant GO", 
+                          ontology = "BP", allGenes = pos_geneibd_3v2h, 
+                          geneSel = topDiffGenes, nodeSize = 10, annot = annFUN.org , 
+                          mapping = "org.Hs.eg.db", ID="entrez")
+
+resultFisher_posibd_3v2h <- runTest(GOdata_posibd_3v2h, algorithm = "classic", statistic = "fisher")
+resultKS_posibd_3v2h <- runTest(GOdata_posibd_3v2h, algorithm = "classic", statistic = "ks")
+resultKS.elim_posibd_3v2h <- runTest(GOdata_posibd_3v2h, algorithm = "elim", statistic = "ks")
+allRes_posibd_3v2h <- GenTable(GOdata_posibd_3v2h, classicFisher = resultFisher_posibd_3v2h, 
+                               classicKS = resultKS_posibd_3v2h, 
+                               elimKS = resultKS.elim_posibd_3v2h, 
+                               orderBy = "classicFisher", 
+                               ranksOf = "classicFisher", topNodes = 10)
+# allRes_posibd_3v2h
+
+# Supplementary Figure 10
+showSigOfNodes(GOdata_posibd_3v2h, score(resultFisher_posibd_3v2h), 
+               firstSigNodes = 10, useInfo = 'all')
+printGraph(GOdata_posibd_3v2h, resultFisher_posibd_3v2h, firstSigNodes = 10, 
+           fn.prefix = "SuppFig10", useInfo = "all", pdfSW = TRUE)
+
+#heatmap table
+tbl_up_bp_3v2h <- topGO(goh2, n=15, sort="up", ontology = "BP")
+tbl_dn_bp_3v2h <- topGO(goh2, n=15, sort="down", ontology = "BP")
+log.tbl_up_bp_3v2h <- append(-log2(tbl_up_bp_3v2h[,6]),-log2(tbl_dn_bp_3v2h[,6]))
+log.tbl_dn_bp_3v2h <- append(-log2(tbl_up_bp_3v2h[,7]),-log2(tbl_dn_bp_3v2h[,7]))
+
+rowname <- rep(c(paste(rownames(tbl_up_bp_3v2h)," ",tbl_up_bp_3v2h$Term),
+                 paste(rownames(tbl_dn_bp_3v2h)," ",tbl_dn_bp_3v2h$Term)),2)
+colname <- c(rep("Non-IBD",30),rep("IBD",30))
+P_value <- append(log.tbl_up_bp_3v2h, log.tbl_dn_bp_3v2h)
+
+#create dataframe and remove 0's
+log.tbl_all_bp_3v2h <- as.data.frame(cbind(rowname,colname,as.numeric(P_value)))
+log.tbl_all_bp_3v2h[log.tbl_all_bp_3v2h == 0] <- NA
+# write.table(log.tbl_all_bp_3v2h, file = "log_tbl_all_ibd_3v2h.txt")
+
+#Supplementary Figure 4d
+ibd_3v2h_heatmap_GO <- ggplot(log.tbl_all_bp_3v2h, 
+                              mapping = aes(x = colname, y = rowname, fill = P_value)) + 
+  geom_tile(colour="white",size=0.25) +
+  scale_y_discrete(expand=c(0,0)) +
+  scale_x_discrete(expand=c(0,0)) +
+  theme_grey(base_size = 14) +
+  labs(x = "", y = "") +
+  coord_fixed(ratio=0.25) +
+  theme(
+    #bold font for legend text
+    legend.text=element_text(face="bold"),
+    legend.position="top",
+    #set thickness of axis ticks
+    axis.ticks=element_line(size=0.4),
+    #remove plot background
+    plot.background=element_blank(),
+    #remove plot border
+    panel.border=element_blank()) +
+  scale_fill_continuous_sequential(palette = "Heat", name="-log2(P value)")
+ibd_3v2h_heatmap_GO
+# ggsave(
+#   "ibd_3v2h_heatmap_GO_BP.png",
+#   ibd_3v2h_heatmap_GO,
+#   width = 8.5,
+#   height = 11,
+#   dpi = 1200
+# )
+
+
+```

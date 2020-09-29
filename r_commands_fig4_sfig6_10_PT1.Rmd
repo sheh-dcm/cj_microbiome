@@ -1,0 +1,138 @@
+---
+title: "Common Marmoset Gut Microbiome Profiles in Health and Intestinal Disease"
+author: "Alex Sheh"
+date: "September 21, 2020"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# This file takes FASTQ files and outputs feature counts
+# 1 Obtain the FASTQ files deposited in SRA
+
+The fastq files can be downloaded from SRA #SRP278735 (Bioproject # PRJNA659238)
+
+SRR12514529/SAMN15903944 - Non-stricture control (IBD) - Duodenum - tissue cross-section - Sample #3
+
+SRR12514530/SAMN15903943 - Non-stricture control (IBD) - Duodenum - tissue cross-section - Sample #7
+
+SRR12514531/SAMN15903942 - Non-stricture control (IBD) - Duodenum - tissue cross-section - Sample #9
+
+SRR12514532/SAMN15903941 - Duodenal stricture/ulcer - Duodenum - tissue cross-section - Sample #5
+
+SRR12514533/SAMN15903940 - Duodenal stricture/ulcer - Duodenum - tissue cross-section - Sample #14
+
+SRR12514534/SAMN15903939 - Duodenal stricture/ulcer - Duodenum - tissue cross-section - Sample #21
+
+SRR12514535/SAMN15903938 - IBD - Jejunum - tissue cross-section - Sample #2
+
+SRR12514536/SAMN15903937 - IBD - Jejunum - tissue cross-section - Sample #4
+
+SRR12514537/SAMN15903936 - IBD - Jejunum - tissue cross-section - Sample #6
+
+SRR12514538/SAMN15903935 - Non-IBD control (stricture) - Jejunum - tissue cross-section - Sample #8
+
+SRR12514539/SAMN15903934 - Non-IBD control (stricture) - Jejunum - tissue cross-section - Sample #10
+
+SRR12514540/SAMN15903933 - Non-IBD control (stricture) - Jejunum - tissue cross-section - Sample #15
+
+We rename them and place them in /Raw_Data folder and gzipped
+For example, after running the SRA toolkit 2.10.8 and obtaining split FASTQ files from SRR12514540.
+We use "fastq-dump SRR12514540 --split-files we obtained SRR12514540_1.fastq and SRR12514540_2.fastq. 
+These files would be renamed  15_R1.fastq and 15_R2.fastq, and gzipped to fastq.gz files.
+We placed in /Raw_Data based on the Sample # above.
+
+# 2 Download references for Callithrix jacchus
+We used the March 2009 (WUGSC 3.2/calJac3) assembly of the marmoset genome (calJac3)
+http://hgdownload.soe.ucsc.edu/goldenPath/calJac3/bigZips/
+We downloaded "calJac3.fa.gz" and "calJac3.ncbiRefSeq.gtf.gz" into folder /ref and unzipped the .gz files
+
+Now we proceed to load the libraries
+
+```{r libraries}
+# for ML algorithms
+library(Rsubread)
+library(edgeR)
+library(gplots)
+library(org.Hs.eg.db)
+
+sessionInfo()
+
+```
+
+
+```{r build index and align, results="hide", warning=FALSE}
+fastq.files <- list.files(path = "./Raw_Data", pattern = ".fastq.gz$", full.names = TRUE)
+buildindex(basename="cj",reference="./ref/calJac3.fa", gappedIndex = TRUE) # index is built
+
+# now we use the "cj" index created from "calJac3.fa" to align all the reads and generate BAM files
+align(index="cj",readfile1="./Raw_Data/2_R1.fastq.gz",readfile2="./Raw_Data/2_R2.fastq.gz",
+      type="dna", output_file="2.bam", nthreads=4, minFragLength=50,maxFragLength=600)
+align(index="cj",readfile1="./Raw_Data/3_R1.fastq.gz",readfile2="./Raw_Data/3_R2.fastq.gz",
+      type="dna", output_file="3.bam", nthreads=4, minFragLength=50,maxFragLength=600)
+align(index="cj",readfile1="./Raw_Data/4_R1.fastq.gz",readfile2="./Raw_Data/4_R2.fastq.gz",
+      type="dna", output_file="4.bam", nthreads=4, minFragLength=50,maxFragLength=600)
+align(index="cj",readfile1="./Raw_Data/5_R1.fastq.gz",readfile2="./Raw_Data/5_R2.fastq.gz",
+      type="dna", output_file="5.bam", nthreads=4, minFragLength=50,maxFragLength=600)
+align(index="cj",readfile1="./Raw_Data/6_R1.fastq.gz",readfile2="./Raw_Data/6_R2.fastq.gz",
+      type="dna", output_file="6.bam", nthreads=4, minFragLength=50,maxFragLength=600)
+align(index="cj",readfile1="./Raw_Data/7_R1.fastq.gz",readfile2="./Raw_Data/7_R2.fastq.gz",
+      type="dna", output_file="7.bam", nthreads=4, minFragLength=50,maxFragLength=600)
+align(index="cj",readfile1="./Raw_Data/8_R1.fastq.gz",readfile2="./Raw_Data/8_R2.fastq.gz",
+      type="dna", output_file="8.bam", nthreads=4, minFragLength=50,maxFragLength=600)
+align(index="cj",readfile1="./Raw_Data/9_R1.fastq.gz",readfile2="./Raw_Data/9_R2.fastq.gz",
+      type="dna", output_file="9.bam", nthreads=4, minFragLength=50,maxFragLength=600)
+align(index="cj",readfile1="./Raw_Data/10_R1.fastq.gz",readfile2="./Raw_Data/10_R2.fastq.gz",
+      type="dna", output_file="10.bam", nthreads=4, minFragLength=50,maxFragLength=600)
+align(index="cj",readfile1="./Raw_Data/14_R1.fastq.gz",readfile2="./Raw_Data/14_R2.fastq.gz",
+      type="dna", output_file="14.bam", nthreads=4, minFragLength=50,maxFragLength=600)
+align(index="cj",readfile1="./Raw_Data/15_R1.fastq.gz",readfile2="./Raw_Data/15_R2.fastq.gz",
+      type="dna", output_file="15.bam", nthreads=4, minFragLength=50,maxFragLength=600)
+align(index="cj",readfile1="./Raw_Data/21_R1.fastq.gz",readfile2="./Raw_Data/21_R2.fastq.gz",
+      type="dna", output_file="21.bam", nthreads=4, minFragLength=50,maxFragLength=600)
+
+#flattened GTF file and use "gene_id" using marmoset annotations
+cj_annot <- flattenGTF("./ref/calJac3.ncbiRefSeq.gtf", GTF.featureType = "exon", 
+                       GTF.attrType = "gene_id", method = "merge")
+
+# counts features in the BAM files
+fc_2 <- featureCounts("2.bam", annot.ext = cj_annot, isPairedEnd = TRUE)
+fc_3 <- featureCounts("3.bam", annot.ext = cj_annot, isPairedEnd = TRUE)
+fc_4 <- featureCounts("4.bam", annot.ext = cj_annot, isPairedEnd = TRUE)
+fc_5 <- featureCounts("5.bam", annot.ext = cj_annot, isPairedEnd = TRUE)
+fc_6 <- featureCounts("6.bam", annot.ext = cj_annot, isPairedEnd = TRUE)
+fc_7 <- featureCounts("7.bam", annot.ext = cj_annot, isPairedEnd = TRUE)
+fc_8 <- featureCounts("8.bam", annot.ext = cj_annot, isPairedEnd = TRUE)
+fc_9 <- featureCounts("9.bam", annot.ext = cj_annot, isPairedEnd = TRUE)
+fc_10 <- featureCounts("10.bam", annot.ext = cj_annot, isPairedEnd = TRUE)
+fc_14 <- featureCounts("14.bam", annot.ext = cj_annot, isPairedEnd = TRUE)
+fc_15 <- featureCounts("15.bam", annot.ext = cj_annot, isPairedEnd = TRUE)
+fc_21 <- featureCounts("21.bam", annot.ext = cj_annot, isPairedEnd = TRUE)
+
+
+# Due to the paucity of annotated marmoset databases for pathway analysis, marmoset gene names
+# were cross-referenced with human gene names. Exact matches were recorded and human Entrez 
+# gene IDs were added to a modified GTF file witn additional column "h_id". Unmatched genes 
+# were marked "NA"
+#A second annotation file (cj_annot_h) was created using the human Entrez gene ID 
+#column "h_id" as the GTF.attrType
+load("cj_annot_h.RData")
+
+fc_2h <- featureCounts("2.bam", annot.ext = cj_annot_h, isPairedEnd = TRUE)
+fc_3h <- featureCounts("3.bam", annot.ext = cj_annot_h, isPairedEnd = TRUE)
+fc_4h <- featureCounts("4.bam", annot.ext = cj_annot_h, isPairedEnd = TRUE)
+fc_5h <- featureCounts("5.bam", annot.ext = cj_annot_h, isPairedEnd = TRUE)
+fc_6h <- featureCounts("6.bam", annot.ext = cj_annot_h, isPairedEnd = TRUE)
+fc_7h <- featureCounts("7.bam", annot.ext = cj_annot_h, isPairedEnd = TRUE)
+fc_8h <- featureCounts("8.bam", annot.ext = cj_annot_h, isPairedEnd = TRUE)
+fc_9h <- featureCounts("9.bam", annot.ext = cj_annot_h, isPairedEnd = TRUE)
+fc_10h <- featureCounts("10.bam", annot.ext = cj_annot_h, isPairedEnd = TRUE)
+fc_14h <- featureCounts("14.bam", annot.ext = cj_annot_h, isPairedEnd = TRUE)
+fc_15h <- featureCounts("15.bam", annot.ext = cj_annot_h, isPairedEnd = TRUE)
+fc_21h <- featureCounts("21.bam", annot.ext = cj_annot_h, isPairedEnd = TRUE)
+
+
+```

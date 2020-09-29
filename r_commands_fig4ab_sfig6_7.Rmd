@@ -1,0 +1,398 @@
+---
+title: "Common Marmoset Gut Microbiome Profiles in Health and Intestinal Disease"
+author: "Alex Sheh"
+date: "September 21, 2020"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# This is the 2nd part of the RNAseq analysis following FASTQ processing and alignment. This section focuses on duodenal stricture samples
+## We load rdata file with the feature counts and libraries.
+
+```{r libraries}
+load("duo_cj_feature_counts.RData")
+load("duo_hs_feature_counts.RData")
+
+# for ML algorithms
+library(Rsubread)
+library(edgeR)
+library(gplots)
+library(org.Hs.eg.db)
+library(AnnotationDbi)
+library(GO.db)
+library(mygene)
+library(topGO)
+data("geneList")
+library(Rgraphviz)
+library(ggplot2)
+library(colorspace)
+library(ggVennDiagram)
+
+sessionInfo()
+
+```
+
+```{r function getgeneid, results="hide", warning=FALSE}
+##########function getgeneid
+getgeneid<-function(strGO,isde){
+  require(org.Hs.eg.db)
+  require(mygene)
+  require(AnnotationDbi)
+  x <- org.Hs.egGO2ALLEGS
+  Rkeys(x) <- strGO
+  EG <- mappedLkeys(x)
+  
+  is.deh.keep<-isde@.Data!=0
+  is.deh.kept <- as.matrix(isde[is.deh.keep])
+  rnames <-rownames(isde)
+  rnames <- rnames[is.deh.keep]
+  rownames(is.deh.kept)<-rnames
+  isde_GO <- intersect(EG, rownames(is.deh.kept))
+  GOI<-as.matrix(is.deh.kept[isde_GO,])
+  return(getGenes(rownames(GOI), fields = c("symbol","name","summary")))
+}
+```
+# Compare stricture cases
+```{r group stricture samples, results="hide", warning=FALSE}
+
+#tabulate
+Duo_6 <- cbind(fc_3$counts, fc_7$counts, fc_9$counts, fc_5$counts, 
+               fc_14$counts, fc_21$counts)
+# write.table(Duo_6, file="20200824_raw_feature_counts_duo_3v3p.txt")
+
+g_3v3p <- c("duo_non","duo_non","duo_non","duo_str","duo_str","duo_str")
+
+#trim lowly expressed exons
+Duo_3v3p <- DGEList(counts = Duo_6[,1:6], group = g_3v3p)
+# dim(Duo_3v3p)
+
+#counts per million have to have counts greater than X per million 
+# and be found in at least Y samples
+round_3v3p <- as.numeric(round(cpm(10, mean(Duo_3v3p$samples$lib.size))))
+#this value is used in the rowsum inequality
+keep_3v3p <-rowSums(cpm(Duo_3v3p)>round_3v3p) >= 2
+Duo_3v3p <- Duo_3v3p[keep_3v3p,]
+# dim(Duo_3v3p)
+
+#TMM normalization
+Duo_3v3p.norm <-calcNormFactors(Duo_3v3p, method = "TMM")
+Duo_3v3p.norm$samples
+
+# #plot MA plot - mean and difference plot based on the first sample.
+# plotMD(cpm(Duo_3v3p.norm, log=TRUE), column=1)
+# abline(h=0, col="red", lty=2, lwd=2)
+
+#data exploration of dataset
+plotMDS(Duo_3v3p.norm,pch = c(15,15,15,17,17,17), 
+        col = c("blue", "blue","blue", "red","red","red"))
+legend("bottomright", legend=c("non_str", "str"), pch=c(15,17), 
+       col=c("blue","red"), ncol=2)
+# dev.copy(png, paste0("str_3v3p_plotMDS.png"))
+# dev.off()
+
+#Estimate common dispersion (could just return it to Duo_str.norm as it just adds columns)
+des_3v3p <- model.matrix(~ 0 + g_3v3p)
+colnames(des_3v3p) <- c("non_str","str")
+
+Duo_3v3p.norm <- estimateCommonDisp(Duo_3v3p.norm, des_3v3p, verbose = TRUE, robust= TRUE)
+# write.table(Duo_3v3p.norm$counts, file="20200824_duo_3v3p_norm_counts.txt")
+
+fit_3v3p <- glmQLFit(Duo_3v3p.norm, des_3v3p, robust=TRUE)
+head(fit_3v3p$coefficients)
+plotQLDisp(fit_3v3p)
+# dev.copy(png, paste0("str_3v3p_plotQLDisp.png"))
+# dev.off()
+summary(fit_3v3p$df.prior)
+
+# outliers from the mean-NB dispersion trend. Outliers are marked by small prior.df values:
+o_3v3p <- order(fit_3v3p$df.prior)
+Duo_3v3p.norm$counts[o_3v3p[1:6],] #genes tag used in the tutorial but our labels had names
+
+con_3v3p <- makeContrasts(non_str - str, levels=des_3v3p)
+res_3v3p <- glmQLFTest(fit_3v3p, contrast=con_3v3p)
+topTags(res_3v3p)
+#highly expressed in stricture than non-stricture
+
+de_3v3p <- decideTestsDGE(res_3v3p, p.value=0.05)
+# summary(de_3v3p) 
+# plotSmear(res_3v3p, de.tags=rownames(res_3v3p)[de_3v3p!=0])
+# dev.copy(png, paste0("str_3v3p_smear.png"))
+# dev.off()
+
+#supplementary table 5
+write.table(topTags(res_3v3p, n=100000)$table, file="supplementary_table_5.txt")
+
+# #imposing the 1.5 fold change
+res.fc_3v3p <- glmTreat(fit_3v3p, contrast = con_3v3p, lfc = log2(1.5))
+topTags(res.fc_3v3p)
+de.fc_3v3p <- decideTestsDGE(res.fc_3v3p)
+summary(de.fc_3v3p)
+plotMD(res.fc_3v3p, status=de.fc_3v3p, values=c(1,-1), col=c("red","blue"), legend="topright")
+# dev.copy(png, paste0("str_3v3p_plotMD.png"))
+# dev.off()
+
+
+# 4b venn str -------------------------------------------------------------
+str_toptags_3v3p <- topTags(res_3v3p, n =2000, p.value = 0.05)
+str_toptags_3v3p <- as.data.frame(str_toptags_3v3p[,c(1,5)])
+str_toptags_3v3p <- str_toptags_3v3p[order(str_toptags_3v3p$logFC),]
+str_toptags_genes_3v3p <- rownames(str_toptags_3v3p)
+str_genes_3v3p <- rownames(Duo_3v3p.norm$pseudo.counts)
+str_commongenes_3v3p <- setdiff(str_genes_3v3p,str_toptags_genes_3v3p)
+
+str_toptags_3v3p_up <- str_toptags_3v3p$logFC>0
+str_toptags_3v3p_up <- str_toptags_3v3p[str_toptags_3v3p_up,]
+str_toptags_3v3p_dn <- str_toptags_3v3p$logFC<0
+str_toptags_3v3p_dn <- str_toptags_3v3p[str_toptags_3v3p_dn,]
+str_genes_3v3p_up <-rownames(str_toptags_3v3p_up)
+str_genes_3v3p_dn <-rownames(str_toptags_3v3p_dn)
+str_genes_3v3p_com_up <-append(str_genes_3v3p_up,str_commongenes_3v3p)
+str_genes_3v3p_com_dn <-append(str_genes_3v3p_dn,str_commongenes_3v3p)
+
+
+# draw venn
+str_3v3p_venn <- list(Nonstricture=str_genes_3v3p_com_up, Stricture=str_genes_3v3p_com_dn)
+str_3v3p_venn_plot <- ggVennDiagram(str_3v3p_venn,color="black",size=1, 
+                                    category.names = c("         Non-Stricture", "Stricture")) +
+  scale_fill_gradient(low="lightyellow",high = "red") +
+  theme(legend.position = "none")
+str_3v3p_venn_plot
+# ggsave(
+#   "str_3v3p_venn.png",
+#   str_3v3p_venn_plot,
+#   width = 8.5,
+#   height = 6,
+#   dpi = 1200
+# )
+
+```
+```{r goana, results="hide",warning=FALSE}
+# 5 3 vs 3 post human -----------------------------------------------------
+
+#tabulate
+Duo_6h <- cbind(fc_3h$counts, fc_7h$counts, fc_9h$counts, fc_5h$counts, 
+                fc_14h$counts, fc_21h$counts)
+g_3v3ph <- c("duo_non","duo_non","duo_non","duo_str","duo_str","duo_str")
+#trim lowly expressed exons
+Duo_3v3ph <- DGEList(counts = Duo_6h[,1:6], group = g_3v3ph)
+#match symbols to numbers
+Symbol_3v3ph <- mapIds(org.Hs.eg.db, rownames(Duo_3v3ph), keytype = "ENTREZID", column="SYMBOL")
+#remove the ones that were NA
+Duo_3v3ph <- Duo_3v3ph[!is.na(Symbol_3v3ph), ]
+dim_Duo_3v3ph <- as.numeric(dim(Duo_3v3ph))
+# remove all NA
+Duo_3v3ph <- Duo_3v3ph[1:(dim_Duo_3v3ph[1]-1), ]
+
+#counts per million have to have counts greater than X per million 
+#and be found in at least Y samples
+round_3v3ph <- as.numeric(round(cpm(10, mean(Duo_3v3ph$samples$lib.size))))
+#this value is used in the rowsum inequality
+keep_3v3ph <-rowSums(cpm(Duo_3v3ph)>round_3v3ph) >= 2
+Duo_3v3ph <- Duo_3v3ph[keep_3v3ph,]
+# dim(Duo_3v3ph)
+
+#TMM normalization
+Duo_3v3ph.norm <-calcNormFactors(Duo_3v3ph, method = "TMM")
+Duo_3v3ph.norm$samples
+
+# write.table(Duo_3v3ph.norm$pseudo.counts, file = "str_3v3ph_pseudocounts.txt")
+
+#data exploration of dataset
+plotMDS(Duo_3v3ph.norm,pch = c(15,15,15,17,17,17), 
+        col = c("blue", "blue","blue", "red","red", "red","red","red"))
+legend("topright", legend=c("non_str", "str"), pch=c(15,17), col=c("blue","red"), ncol=2)
+# dev.copy(png, paste0("str_3v3ph_plotMDS.png"))
+# dev.off()
+
+#Estimate common dispersion (could just return it to Duo_str.norm as it just adds columns)
+des_3v3ph <- model.matrix(~ 0 + g_3v3ph)
+colnames(des_3v3ph) <- c("non_str","str")
+Duo_3v3ph.norm <- estimateCommonDisp(Duo_3v3ph.norm, des_3v3ph, verbose = TRUE, robust= TRUE)
+# plotBCV(Duo_3v6.norm)
+
+fit_3v3ph <- glmQLFit(Duo_3v3ph.norm, des_3v3ph, robust=TRUE)
+head(fit_3v3ph$coefficients)
+plotQLDisp(fit_3v3ph)
+# dev.copy(png, paste0("str_3v3ph_plotQLDisp.png"))
+# dev.off()
+# summary(fit_3v3ph$df.prior)
+
+# outliers from the mean-NB dispersion trend. Outliers are marked by small prior.df values:
+o_3v3ph <- order(fit_3v3ph$df.prior)
+Duo_3v3ph.norm$counts[o_3v3ph[1:6],] #genes tag used in the tutorial but our labels had names
+
+con_3v3ph <- makeContrasts(non_str - str, levels=des_3v3ph)
+res_3v3ph <- glmQLFTest(fit_3v3ph, contrast=con_3v3ph)
+topTags(res_3v3ph)
+#highly expressed in stricture than non-stricture
+
+de_3v3ph <- decideTestsDGE(res_3v3ph, p.value=0.05)
+# summary(de_3v3ph) 
+# plotSmear(res_3v3ph, de.tags=rownames(res_3v3ph)[de_3v3ph!=0])
+# dev.copy(png, paste0("str_3v3ph_smear.png"))
+# dev.off()
+
+# write.table(topTags(res_3v3ph, n=100000)$table, file="str_3v3ph_topTags_glmQLF.txt")
+
+
+# #imposing the 1.5 fold change
+res.fc_3v3ph <- glmTreat(fit_3v3ph, contrast = con_3v3ph, lfc = log2(1.5))
+topTags(res.fc_3v3ph)
+de.fc_3v3ph <- decideTestsDGE(res.fc_3v3ph)
+summary(de.fc_3v3ph)
+plotMD(res.fc_3v3ph, status=de.fc_3v3ph, values=c(1,-1), col=c("red","blue"), legend="topright")
+
+#Using goana 
+go_3v3ph <-goana(res_3v3ph, species = "Hs", FDR = 0.05)
+# topGO(go_3v3ph, n=15)
+
+#Supplementary table 6
+topGO(go_3v3ph, n=15, sort="down")
+# supplementary table 6a
+write.table(topGO(go_3v3ph,n=1500, sort = "down"), file = "supplementary_table_6a_STR.txt")
+topGO(go_3v3ph, n=15, sort="up")
+#supplementary table 6b
+write.table(topGO(go_3v3ph,n=2500, sort = "up"), file = "supplementary_table_6b_non_STR.txt")
+
+go_3v3ph_str_dn <- rownames(topGO(go_3v3ph, n=15, sort="down"))
+# for (i in 1:15){
+#   write.table(getgeneid(go_3v3ph_str_dn[i],de_3v3ph), 
+# file = paste("go_3v3ph_str_dn",substr(go_3v3ph_str_dn[i],4,
+# nchar(go_3v3ph_str_dn[i])),".txt",sep=""))
+# }
+
+go_3v3ph_str_up <- rownames(topGO(go_3v3ph, n=15, sort="up"))
+# for (i in 1:15){
+#   write.table(getgeneid(go_3v3ph_str_up[i],de_3v3ph), 
+# file = paste("go_3v3ph_str_up",substr(go_3v3ph_str_up[i],4,
+# nchar(go_3v3ph_str_up[i])),".txt",sep=""))
+# }
+
+# Table 2 Tope Gene Ontology sets in Stricture and non-Stricture
+write.table(topGO(go_3v3ph, n=15, sort="up", ontology = "BP"), file = "Table2_nonstr.txt")
+write.table(topGO(go_3v3ph, n=15, sort="down", ontology = "BP"), file = "Table2_str.txt")
+# end table 2
+
+# Using human entrez ids to look at pathways
+
+topTags_3v3ph <- topTags(res_3v3ph, n=100000)$table
+#neg
+negFC_3v3ph <- topTags_3v3ph[,1]<0
+neg_gene_3v3ph <- as.numeric(topTags_3v3ph[,5][negFC_3v3ph])
+names(neg_gene_3v3ph) <-rownames(topTags_3v3ph)[negFC_3v3ph]
+GOdata_neg_3v3ph <- new("topGOdata", description = "Significant GO", 
+                        ontology = "BP", allGenes = neg_gene_3v3ph, geneSel = topDiffGenes, 
+                        nodeSize = 10, annot = annFUN.org , 
+                        mapping = "org.Hs.eg.db", ID="entrez")
+
+resultFisher_neg_3v3ph <- runTest(GOdata_neg_3v3ph, algorithm = "classic", statistic = "fisher")
+resultKS_neg_3v3ph <- runTest(GOdata_neg_3v3ph, algorithm = "classic", statistic = "ks")
+resultKS.elim_neg_3v3ph <- runTest(GOdata_neg_3v3ph, algorithm = "elim", statistic = "ks")
+
+allRes_neg_3v3ph <- GenTable(GOdata_neg_3v3ph, classicFisher = resultFisher_neg_3v3ph, 
+                             classicKS = resultKS_neg_3v3ph, elimKS = resultKS.elim_neg_3v3ph, 
+                             orderBy = "classicFisher", ranksOf = "classicFisher", topNodes = 10)
+
+
+#supp fig 6a
+#resembles the GOANA data
+showSigOfNodes(GOdata_neg_3v3ph, score(resultFisher_neg_3v3ph), firstSigNodes = 10, useInfo = 'all')
+printGraph(GOdata_neg_3v3ph, resultFisher_neg_3v3ph, firstSigNodes = 10, fn.prefix = "SuppFig6a",
+           useInfo = "all", pdfSW = TRUE)
+
+#pos
+posFC_3v3ph <- topTags_3v3ph[,1]>0
+pos_gene_3v3ph <- as.numeric(topTags_3v3ph[,5][posFC_3v3ph])
+names(pos_gene_3v3ph) <-rownames(topTags_3v3ph)[posFC_3v3ph]
+GOdata_pos_3v3ph <- new("topGOdata", description = "Significant GO", 
+                        ontology = "BP", allGenes = pos_gene_3v3ph, geneSel = topDiffGenes, 
+                        nodeSize = 10, annot = annFUN.org , mapping = "org.Hs.eg.db", ID="entrez")
+
+resultFisher_pos_3v3ph <- runTest(GOdata_pos_3v3ph, algorithm = "classic", statistic = "fisher")
+resultKS_pos_3v3ph <- runTest(GOdata_pos_3v3ph, algorithm = "classic", statistic = "ks")
+resultKS.elim_pos_3v3ph <- runTest(GOdata_pos_3v3ph, algorithm = "elim", statistic = "ks")
+
+allRes_pos_3v3ph <- GenTable(GOdata_pos_3v3ph, classicFisher = resultFisher_pos_3v3ph, 
+                             classicKS = resultKS_pos_3v3ph, elimKS = resultKS.elim_pos_3v3ph, 
+                             orderBy = "classicFisher", ranksOf = "classicFisher", topNodes = 10)
+
+#supp figure 7
+#resembles the GOANA data
+showSigOfNodes(GOdata_pos_3v3ph, score(resultFisher_pos_3v3ph), firstSigNodes = 10, useInfo = 'all')
+printGraph(GOdata_pos_3v3ph, resultFisher_pos_3v3ph, firstSigNodes = 10, 
+           fn.prefix = "SuppFig7", useInfo = "all", pdfSW = TRUE)
+
+# supp figure 6b
+### redo for CC
+GOdata_CC_pos_3v3ph <- new("topGOdata", description = "Significant GO", ontology = "CC", 
+                           allGenes = pos_gene_3v3ph, geneSel = topDiffGenes, nodeSize = 10, 
+                           annot = annFUN.org , mapping = "org.Hs.eg.db", ID="entrez")
+resultFisher_CC_pos_3v3ph <- runTest(GOdata_CC_pos_3v3ph, algorithm = "classic", statistic = "fisher")
+showSigOfNodes(GOdata_CC_pos_3v3ph, score(resultFisher_CC_pos_3v3ph), firstSigNodes = 10, 
+               useInfo = 'all')
+printGraph(GOdata_CC_pos_3v3ph, resultFisher_CC_pos_3v3ph, firstSigNodes = 10, 
+           fn.prefix = "SuppFig6b", useInfo = "all", pdfSW = TRUE)
+
+GOdata_CC_neg_3v3ph <- new("topGOdata", description = "Significant GO", ontology = "CC", 
+                           allGenes = neg_gene_3v3ph, geneSel = topDiffGenes, nodeSize = 10, 
+                           annot = annFUN.org , mapping = "org.Hs.eg.db", ID="entrez")
+resultFisher_CC_neg_3v3ph <- runTest(GOdata_CC_neg_3v3ph, algorithm = "classic", statistic = "fisher")
+# showSigOfNodes(GOdata_CC_neg_3v3ph, score(resultFisher_CC_neg_3v3ph), 
+#firstSigNodes = 10, useInfo = 'all')
+# printGraph(GOdata_CC_neg_3v3ph, resultFisher_CC_neg_3v3ph, firstSigNodes = 10, 
+#fn.prefix = "neg_Fisher_CC_3v3ph_tGO", useInfo = "all", pdfSW = TRUE)
+
+
+
+#heatmap table
+tbl_up_bp_3v3ph <- topGO(go_3v3ph, n=15, sort="up", ontology = "BP")
+tbl_dn_bp_3v3ph <- topGO(go_3v3ph, n=15, sort="down", ontology = "BP")
+log.tbl_up_bp_3v3ph <- append(-log2(tbl_up_bp_3v3ph[,6]),-log2(tbl_dn_bp_3v3ph[,6]))
+log.tbl_dn_bp_3v3ph <- append(-log2(tbl_up_bp_3v3ph[,7]),-log2(tbl_dn_bp_3v3ph[,7]))
+
+rowname <- rep(c(paste(rownames(tbl_up_bp_3v3ph),
+                       " ",tbl_up_bp_3v3ph$Term),paste(rownames(tbl_dn_bp_3v3ph),
+                                                       " ",tbl_dn_bp_3v3ph$Term)),2)
+colname <- c(rep("Non-stricture",30),rep("Stricture",30))
+P_value <- append(log.tbl_up_bp_3v3ph, log.tbl_dn_bp_3v3ph)
+
+#create dataframe and remove 0's
+log.tbl_all_bp_3v3ph <- as.data.frame(cbind(rowname,colname,as.numeric(P_value)))
+log.tbl_all_bp_3v3ph[log.tbl_all_bp_3v3ph == 0] <- NA
+# write.table(log.tbl_all_bp_3v3ph, file = "log_tbl_all_str_3v3ph.txt")
+
+# supplementary Fig 4b
+str_3v3ph_heatmap_GO <- ggplot(log.tbl_all_bp_3v3ph, 
+                               mapping = aes(x = colname, y = rowname, fill = P_value)) + 
+  geom_tile(colour="white",size=0.25) +
+  scale_y_discrete(expand=c(0,0)) +
+  scale_x_discrete(expand=c(0,0)) +
+  theme_grey(base_size = 14) +
+  labs(x = "", y = "") +
+  coord_fixed(ratio=0.25) +
+  theme(
+    #bold font for legend text
+    legend.text=element_text(face="bold"),
+    legend.position="top",
+    #set thickness of axis ticks
+    axis.ticks=element_line(size=0.4),
+    #remove plot background
+    plot.background=element_blank(),
+    #remove plot border
+    panel.border=element_blank()) +
+  scale_fill_continuous_sequential(palette = "Heat", name="-log2(P value)")
+str_3v3ph_heatmap_GO
+# ggsave(
+#   "str_3v3ph_heatmap_GO_BP.png",
+#   str_3v3ph_heatmap_GO,
+#   width = 8.5,
+#   height = 11,
+#   dpi = 1200
+# )
+
+
+```

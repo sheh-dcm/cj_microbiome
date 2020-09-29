@@ -1,0 +1,1004 @@
+---
+title: "Common Marmoset Gut Microbiome Profiles in Health and Intestinal Disease"
+author: "Alex Sheh and Jose Molina Mora"
+date: "September 21, 2020"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Loading R data file to generate figure 2a, b and d. 
+Includes the following data:
+*fig2a - bar and pie charts
+*fig2b - boxplots for 9 ASVs that distinguish strictures vs non-strictures
+*fig2d - dotplot for relative abundance of Clostridium sensu stricto 1 in the duodenum
+
+
+```{r data}
+load("fig2_sfig4_data.RData")
+```
+
+
+```{r libraries}
+#for figure 2 images
+library(dplyr)
+library(ggplot2)
+library(reshape2)
+require(scales)
+
+# for ML algorithms
+#BiocManager::install(c("gcrma"))
+library(caret)
+library(ROCR)    # for ROC curve
+library(rpart)   # for decision tree in case RF is selected
+library(rattle)  # for dataset and decision tree
+library(ellipse)
+library(ggfortify)
+library(plotrix)
+library(gcrma)
+library(RColorBrewer)
+library(kmed)
+library(DescTools) #
+sessionInfo()
+
+```
+
+# Figure 2 stricture
+## Figure 2a
+Figure 2a creates a bar chart and a pie chart based on the relative abundances of genera for stricture progressors and non-progressors. Bar chart shows every individual sample while the pie chart presents an average based on stricture. Data is in variables "fig2a_bar" and "fig2a_pie"
+
+```{r Figure 2A for Strictures,message=FALSE}
+
+#figure 2a bar chart
+fig2a.melt <- melt(fig2a_bar)
+bar_2a <- ggplot(fig2a.melt, aes(x = Sample, y = value))
+bar_2a <- bar_2a + geom_bar(aes(fill = variable), stat = "identity", width = 1) + 
+  labs(x = "group", y = "percentage (%)") + 
+  scale_fill_manual(values = c("orangered", "blue", "palegreen", "deepskyblue","green3",
+                               "orchid1", "yellow", "maroon3", "slateblue1","firebrick4",
+                               "red", "grey26", "chocolate2", "cornsilk")) +
+  theme(axis.text.x = element_text(angle = 90,size=7), legend.position = "bottom")
+bar_2a
+#stricture cases labeled as "YES" on the right side of figure
+
+#figure 2a pie chart
+non_stricturePCT<- round(100*fig2a_pie$Non.Stricture/sum(fig2a_pie$Non.Stricture), 1)
+stricturePCT<- round(100*fig2a_pie$Stricture/sum(fig2a_pie$Stricture), 1)
+
+#NON-stricture pie chart
+pie(fig2a_pie$Non.Stricture,labels = "", radius = 0.9, 
+    main = "Non-Stricture % abundance", col = c("orangered", "blue", "palegreen",
+                                                "deepskyblue","green3", "orchid1",
+                                                "yellow", "maroon3", "slateblue1",
+                                                "firebrick4", "red", "grey26", 
+                                                "chocolate2", "cornsilk"))
+legend("topleft", cex = 0.7, y.intersp=0.75, bty = "n", 
+       legend = paste0(fig2a_pie$X," ", non_stricturePCT, "%"), 
+       fill = c("orangered", "blue", "palegreen", "deepskyblue",
+                "green3", "orchid1", "yellow", "maroon3", "slateblue1",
+                "firebrick4", "red", "grey26", "chocolate2", "cornsilk"))
+
+#Stricture pie chart
+pie(fig2a_pie$Stricture,labels = "", radius = 0.9, main = "Stricture % abundance", 
+    col = c("orangered", "blue", "palegreen", "deepskyblue","green3", "orchid1", 
+            "yellow", "maroon3", "slateblue1","firebrick4", "red", "grey26", 
+            "chocolate2", "cornsilk"))
+legend("topleft", cex = .7, y.intersp=0.75, bty = "n", 
+       legend = paste0(fig2a_pie$X," ", stricturePCT, "%"), 
+       fill = c("orangered", "blue", "palegreen", "deepskyblue",
+                "green3", "orchid1", "yellow", "maroon3", 
+                "slateblue1","firebrick4", "red", "grey26", 
+                "chocolate2", "cornsilk"))
+
+```
+## Figure 2b
+Figure 2b creates boxplots for the 9 ASVs identified as important in the random forest model to distinguish strictures vs non-strictures. RF model is run in full in section for "Fig 2c and Supp. Fig. 2B and 2C".
+
+```{r Figure 2B for stricture, message=FALSE}
+fig2b.melt <- melt(fig2b)
+fig2b_boxplot <- ggplot(fig2b.melt, aes(x=Class, y=value, fill=variable)) + 
+  geom_boxplot() +
+  facet_wrap(~variable, scale = "free")
+fig2b_boxplot
+
+
+```
+
+## Figure 2d
+Figure 2d creates the dot plot based on the relative abundances of Clostridium sensu stricto 1 in duodenum of stricture progressors and non-progressors. Data is in variable "fig2d"
+
+```{r Figure 2D for Clostridium sensu strico 1 in duodenums, message=FALSE}
+figure_2d<- ggplot(fig2d, aes(x=Dx, y=PCT, fill=Dx)) + 
+  geom_dotplot(binaxis = 'y', stackdir = 'center') + 
+  stat_summary(fun=mean, geom="point", shape=18, size=6, color="black") + 
+  theme_classic() +
+  theme(legend.position = "none",axis.text = element_text(size = 12),
+        axis.title = element_text(size = 14, face = "bold")) +
+  scale_y_continuous(labels = percent) +
+  labs(x="", y = "% abundance in Duodenum")
+figure_2d
+
+
+```
+
+
+## Figure 2c and Supplemental Figure 4B-I
+Machine learning algorithm originally developed by Jose Molina Mora and modified by Alex Sheh. Data normalized by min-max normalization.
+
+Figure 2c is a composite of the Receiver Operating Curves for OTU data, serum chemistry data and complete blood count data. 
+
+Supplemental Figure 4a was created by QIIME2. 
+SFig 4B and C based on microbiome data in dataset "str_otu" with metadata in "str_meta"
+SFig 4D, E and F based on serum chemistry data
+SFig 4B and C based on CBC data
+
+## Start Ranking algorithm section for microbiome
+```{r, message=FALSE}
+#ANALYSIS OF RANKING ALGORITHMS AND PARAMETER SELECTION
+#Developed by Jose Molina Mora. Modified by Alex Sheh
+# random forest models modeling stricture data based on microbiome
+
+##########function minmax
+minmax<-function(mat){
+  mat.max = apply(mat,2,max) 
+  mat.min = apply(mat,2,min)
+  for (i in 1:dim(mat)[2]){
+    mat[,i]<-(mat[,i]-mat.min[i])/(mat.max[i]-mat.min[i])
+  }
+  #CHANGE NAs to 0
+  mat[is.na(mat)] <- 0
+  #REMOVE the NAs
+  #mat0 <- (colSums(mat, na.rm=T) != 0) #some OTUs not present in this data subset
+  #mat <- mat[, mat0] # all the non-zero columns
+  return(mat)
+}
+##############################
+```
+
+## evaluate the raw data prior to applying any algorithms
+```{r load data and first look, message=FALSE}
+
+# PART 1. LOAD DATA and metadata. Visualization of data
+Data <- minmax(str_otu)
+conditions <- str_meta
+
+##01_PCA - Class (Yes = Stricture and No = non-stricture)
+pca<-prcomp(Data)
+autoplot(pca, data = conditions, colour = 'Class', main ="PCA for all data")
+
+## sub-PCA plots using metadata 
+## 01-1_PCA - Age at sampling
+autoplot(pca, data = conditions, colour = 'Age_at_sampling', main ="PCA for all data")
+
+## 01-2_PCA - Sex
+autoplot(pca, data = conditions, colour = 'Sex', main ="PCA for all data")
+
+## 01-3_PCA - Source
+autoplot(pca, data = conditions, colour = 'Source', main ="PCA for all data")
+
+## 01-4_PCA - Tissue type
+autoplot(pca, data = conditions, colour = 'Tissue', main ="PCA for all data")
+ 
+# Split the data into training (80%) and testing (20%) sets
+# set.seed(2)
+test_index<-createDataPartition(conditions$Class, p=0.80, list = FALSE)
+
+#Using D training to select features and then tested on Dtesting 
+Dtraining <- Data[test_index, ]
+Dtesting<- Data[-test_index,]
+
+Conditrain<-conditions[test_index, ]
+Conditesting<-conditions[-test_index,]
+
+#03_distribution of data by class in the entire dataset, the training set and testing set
+par(mfrow=c(1,3))
+
+group1<-conditions$Class
+conteos1 <- table(group1)
+barplot(conteos1, main="Total data",
+        xlab="Disease", col=c("lightcoral","cyan3"))
+        #, legend = c("No","Yes"))
+
+group2<-Conditrain$Class
+conteos2 <- table(group2)
+barplot(conteos2, main="Training data",
+        xlab="Disease", col=c("lightcoral","cyan3"))
+
+
+group3<-Conditesting$Class
+conteos3 <- table(group3)
+barplot(conteos3, main="Testing data",
+        xlab="Disease", col=c("lightcoral","cyan3"))
+
+par(mfrow=c(1,1))
+
+# Distribution in training set
+percentage <- prop.table(table(Conditrain$Class)) * 100
+# cbind(freq=table(Conditrain$Class), percentage=percentage)
+
+#Distribution in testing set
+percentage2 <- prop.table(table(Conditesting$Class))*100
+# cbind(freq=table(Conditesting$Class),percentage=percentage2)
+
+# PART 2. DISTRIBUTION OF VARIABLES BY CLASS
+# Performed on training data but could be done on entire set or testing set
+# split input and output
+x <- Dtraining
+y <- Conditrain$Class # class
+sx <- Dtraining[,c(1:6)]
+
+```
+## Set the seed
+NOTE: this seed should be varied to test the robustness of results. Different seeds may alter the exact results in terms of accuracy, number of variables of importance, AUC, etc. Running the rest of the analysis over multiple conditions can help find the best algorithm for your analysis.
+
+In our case we selected RF as it was consistently the best over multiple datasets but under certain conditions, SVM or other algorithms could also be considered as good classifiers
+
+```{r set seeed for algorithms, message=FALSE}
+set.seed(2)
+```
+## Apply the algorithms
+```{r apply algorithms, results="hide", warning=FALSE}
+#ALGORITHMS
+# Run algorithms using 10-fold cross validation
+control <- trainControl(method="cv", number=10, classProbs=TRUE)
+metric <- "Accuracy"
+
+#Classification algorithms
+# a) linear algorithms
+#fit.lda <- train(Dtraining, Conditrain$Class, method="lda", metric=metric, 
+#           trControl=control)
+
+# b) nonlinear algorithms
+# CART
+fit.cart <- train(Dtraining, Conditrain$Class, method="rpart", metric=metric, trControl=control)
+# kNN
+fit.knn <- train(Dtraining, Conditrain$Class, method="knn", metric=metric, 
+                 trControl=control)
+# c) advanced algorithms
+# SVM
+fit.svm <- train(Dtraining, Conditrain$Class, method="svmRadial", metric=metric,
+                 trControl=control)
+# Random Forest
+fit.rf <- train(Dtraining, Conditrain$Class, method="rf", metric=metric, 
+                trControl=control)
+```
+## SUPPLEMENTAL FIGURE 4B - compare multiple algorithms to see which classify the data best
+## This is the type of plot used for Supplemental Figure 4B
+```{r supp fig 4b, message=FALSE}
+##Supplemental Figure 4b - Classification
+#summarize accuracy of models
+results <- resamples(list(cart=fit.cart,svm=fit.svm,knn=fit.knn,rf=fit.rf,rf=fit.rf))
+summary(results)
+# compare accuracy of models
+dotplot(results)
+
+```
+## RF performed best in most scenarios but SVM also had good performance with this data
+
+
+```{r select algorithm, results="hide", warning=FALSE}
+#SELECT THE RF ALGORITHM BASED ON RESULTS
+#model=fit.knn
+#kalgoritmo="knn"
+#model=fit.svm
+#kalgoritmo="svmRadial"
+model=fit.rf
+kalgoritmo="rf"
+
+importance <- varImp(model, scale=TRUE)
+# head(importance)
+
+#05_import_all
+#Graph importance
+plot(importance, main = paste("All variables with algorithm", kalgoritmo))
+
+
+#INDEX
+IndexRank <-data.frame(sort(importance$importance$Overall, 
+                            index.return = TRUE, decreasing = TRUE)[2])
+#For SVM and KNN importance$importance$Control
+#For RF/cart use $Overall (RF only Overall)
+#IndexRank <-data.frame(sort(importance$importance$Yes, index.return = TRUE,
+#           decreasing = TRUE)[2])
+Ranking<-t(IndexRank)
+
+DtrainingRanked<-Dtraining[,Ranking[1,]]
+DtestingRanked<-Dtesting[,Ranking[1,]]
+DataRanked<-Data[,Ranking[1,]]
+#write.csv(DataRanked, "All_data_ranked.csv")
+
+
+```
+
+
+```{r estimate of accuracy, results="hide", warning=FALSE}
+#EVALUATE TOP VARIABLES
+kvalue=80
+kEvaluacion<-matrix(,nrow=kvalue, ncol=19) # 18 parameters to calculate
+colnames(kEvaluacion)<-c("Accuracy","Kappa","AccuracyLower","AccuracyUpper",
+                         "AccuracyNull", "AccuracyPValue","McnemarPValue",
+                         "Sensitivity", "Specificity", "Pos Pred Value", 
+                         "Neg Pred Value", "Precision", "Recall","F1",
+                         "Prevalence" ,"Detection Rate",
+                         "Detection Prevalence","Balanced Accuracy", "K")
+
+# For k=1 it is calculated separately to define vector
+k=1  
+DtrainK<-as.data.frame(DtrainingRanked[,1])
+colnames(DtrainK)<-colnames(DtrainingRanked)[1]
+DtestK<-as.data.frame(DtestingRanked[,1])
+colnames(DtestK)<-colnames(DtestingRanked)[1]
+
+fit.algorK <- train(DtrainK, Conditrain$Class, method=kalgoritmo, metric=metric,
+                    trControl=control)
+predictionsK <- predict(fit.algorK, DtestK)
+StatisticsK<-confusionMatrix(predictionsK, Conditesting$Class)
+kEvaluacion[1,1:18]<-t(as.data.frame(c(StatisticsK$overall,StatisticsK$byClass)))
+
+
+for (k in 2:kvalue){  
+  DtrainK<-DtrainingRanked[,c(1:k)]
+  DtestK<-DtestingRanked[,c(1:k)]
+  fit.algorK <- train(DtrainK, Conditrain$Class, method=kalgoritmo, metric=metric,
+                      trControl=control)
+  predictionsK <- predict(fit.algorK, DtestK)
+  StatisticsK<-confusionMatrix(predictionsK, Conditesting$Class)
+  kEvaluacion[k,1:18]<-t(as.data.frame(c(StatisticsK$overall,StatisticsK$byClass)))
+}
+
+# StatisticsK$byClass
+EvalK<-as.data.frame(kEvaluacion)
+```
+## Supplemental Figure 4C
+```{r Supp Figure 4C}
+#11_Metrics_per_top
+par(mfrow = c(1,1))
+plot(EvalK$Accuracy,type="o",pch=1,col="green",
+     main = paste("Evaluation by ranked variables with algorithm",
+                  kalgoritmo,sed=""),xlab = "Top variables",
+                  ylab = "Metrics", ylim=c(0,1))
+lines(EvalK$F1,type = "o", pch=2, col="blue")
+lines(EvalK$Kappa,type = "o", pch=3, col="red")
+legend("bottomright",legend=c("Accuracy","F1","Kappa"),pch=c(1,2,3),
+       col=c("green","blue","red"))
+
+
+```
+## for the seed set the number of variables is 9 when the accuracy reaches the plateau
+Here we visualize what using only the 9 variables will look like using boxplots, PCA, etc. as we did in the begining.
+
+```{r choose number of top variables, results="hide", warning=FALSE}
+
+
+#For chosen value of K
+
+ks=9
+DtrainKS<-DtrainingRanked[,c(1:ks)]
+DtestKS<-DtestingRanked[,c(1:ks)]
+
+DataRankedtopK<-DataRanked[,c(1:ks)]
+# write.csv(DataRankedtopK, paste0("DataRankedtop",ks,"-",kalgoritmo,".csv"))
+
+set.seed(3)
+fit.algorKS <- train(DtrainKS, Conditrain$Class, method=kalgoritmo, metric=metric,
+                     trControl=control)
+importance <- varImp(fit.algorKS, scale=TRUE) 
+plot(importance, main = paste('Top ', ks, "variables with algorithm", kalgoritmo))
+
+predictionsKS <- predict(fit.algorKS, DtestKS)
+StatisticsKS<-confusionMatrix(predictionsKS, Conditesting$Class)
+StatisticsKS
+StatisticsKS$overall
+StatisticsKS$byClass
+
+xR <- DtrainKS
+yR <- Conditrain$Class
+sxR <- DtrainingRanked[,c(4,5,6,1,2,3)]
+
+#boxplot
+par(mfrow=c(3,3))
+
+for(i in 1:ks) {
+  boxplot(xR[,i]~y, main=names(xR)[i],col=c("lightcoral","cyan3"),ylab = " ")
+}
+title(paste("Top 9 variables with algorithm", kalgoritmo), outer=TRUE)
+
+par(mfrow=c(1,1))
+
+pca<-prcomp(DataRanked[,1:ks])
+#12_a_PCA-topK_Class
+autoplot(pca, data = conditions, colour = 'Class', main =paste("PCA for top",
+                                                               ks, "variables"))
+
+#12-b_PCA-topK_age
+autoplot(pca, data = conditions, colour = 'Age_at_sampling', 
+         main =paste("PCA for top",ks, "variables"))
+
+#12-c_PCA-topK_sex
+autoplot(pca, data = conditions, colour = 'Sex', main =paste("PCA for top",
+                                                             ks, "variables"))
+
+#12-d_PCA-topK_tissue
+autoplot(pca, data = conditions, colour = 'Tissue', main =paste("PCA for top",
+                                                                ks, "variables"))
+
+```
+## Figure 2C for the microbiome
+```{r Figure 2 C for the microbiome, message=FALSE}
+#PREDICTION
+#For SVM, use:
+#control <- trainControl(method="cv", number=10, classProbs=TRUE) 
+
+#fit.algorKS <- train(Class~., data=DtrainKS, method=kalgoritmo, metric=metric,
+#   trControl=control)
+# ------------------------------------------------------------------------------
+predictionsKSroc<- predict(fit.algorKS, DtestKS,type = "prob")[,2] #prob. clase=yes
+predict.rocr  <- prediction (predictionsKSroc,Conditesting$Class)
+perf.rocr     <- performance(predict.rocr,"tpr","fpr") #True/False positive.rate
+
+#14_ROC-topK
+# GRAPH ROC curve
+# ------------------------------------------------------------------------------
+auc <- as.numeric(performance(predict.rocr ,"auc")@y.values)
+# auc
+par(mfrow = c(1,1))
+plot(perf.rocr,type='o', col = "red",main = paste("Method:", 
+                                                  kalgoritmo, "for top", ks), ylim=c(0,1.01),xlim=c(0,1))  
+abline(a=0, b=1)
+legend("bottomright",legend= paste('AUC for', kalgoritmo, ' = ', round(auc,2)))
+
+
+#COMPARISON CASE BY CASE for testing set
+PRED<-as.data.frame(c(predictionsKS))
+PRED2<-as.data.frame(c(Conditesting$Class))
+juntos<-as.data.frame(c(PRED,PRED2))
+# View(juntos)
+
+#Extracting lists
+ListaVariablestop<-as.data.frame(colnames(DtrainKS))
+# write.csv(ListaVariablestop, file=paste(kalgoritmo,"Lista_top_variables.csv"))
+
+#Extracting lists
+ListaVariablesall<-as.data.frame(colnames(DtrainingRanked))
+# write.csv(ListaVariablesall, file=paste(kalgoritmo,"Lista_all_variables.csv"))
+
+#SAVING METRICS
+# write.csv(EvalK, file="Metrics.csv")
+
+
+
+```
+With the current settings using the 9 variables selected by the model we calcutate the AUC. 
+##This ROC plot was used in Figure 2C.
+
+The ASVs are labeled based on the naming convention set forth by QIIME2. Upon importation in R, the ASVs whose names begin with a number have an X added to the front.
+
+#Analysis of serum chemistry
+```{r model stricture based on serum chemistry, results="hide", warning=FALSE}
+# PART 1. LOAD DATA and metadata. Visualization of data
+Data <- minmax(str_chem)
+conditions <- str_meta_chem
+
+##01_PCA - Class (Yes = Stricture and No = non-stricture)
+pca<-prcomp(Data)
+autoplot(pca, data = conditions, colour = 'Class', main ="PCA for all data")
+
+## sub-PCA plots using metadata 
+## 01-1_PCA - Age
+autoplot(pca, data = conditions, colour = 'Age', main ="PCA for all data")
+
+## 01-2_PCA - Sex
+autoplot(pca, data = conditions, colour = 'Sex', main ="PCA for all data")
+
+## 01-3_PCA - Source
+autoplot(pca, data = conditions, colour = 'Source', main ="PCA for all data")
+
+# Split the data into training (80%) and testing (20%) sets
+set.seed(5)
+test_index<-createDataPartition(conditions$Class, p=0.80, list = FALSE)
+
+#Using D training to select features and then tested on Dtesting 
+Dtraining <- Data[test_index, ]
+Dtesting<- Data[-test_index,]
+
+Conditrain<-conditions[test_index, ]
+Conditesting<-conditions[-test_index,]
+
+#03_distribution of data by class entire dataset, training set and testing set
+par(mfrow=c(1,3))
+
+group1<-conditions$Class
+conteos1 <- table(group1)
+barplot(conteos1, main="Total data",
+        xlab="Disease", col=c("lightcoral","cyan3"))
+        #, legend = c("No","Yes"))
+
+group2<-Conditrain$Class
+conteos2 <- table(group2)
+barplot(conteos2, main="Training data",
+        xlab="Disease", col=c("lightcoral","cyan3"))
+
+
+group3<-Conditesting$Class
+conteos3 <- table(group3)
+barplot(conteos3, main="Testing data",
+        xlab="Disease", col=c("lightcoral","cyan3"))
+
+
+par(mfrow=c(1,1))
+
+# Distribution in training set
+percentage <- prop.table(table(Conditrain$Class)) * 100
+# cbind(freq=table(Conditrain$Class), percentage=percentage)
+
+#Distribution in testing set
+percentage2 <- prop.table(table(Conditesting$Class))*100
+# cbind(freq=table(Conditesting$Class),percentage=percentage2)
+
+# PART 2. DISTRIBUTION OF VARIABLES BY CLASS
+# Performed on training data but could be done on entire set or testing set
+# split input and output
+x <- Dtraining
+y <- Conditrain$Class # class
+sx <- Dtraining[,c(1:6)]
+
+#ALGORITHMS
+
+# Run algorithms using 10-fold cross validation
+control <- trainControl(method="cv", number=10, classProbs=TRUE)
+metric <- "Accuracy"
+
+#Clasification algorithms
+# a) linear algorithms
+fit.lda <- train(Dtraining, Conditrain$Class, method="lda", metric=metric, 
+                 trControl=control)
+# b) nonlinear algorithms
+# CART
+fit.cart <- train(Dtraining, Conditrain$Class, method="rpart", metric=metric,
+                  trControl=control)
+# kNN
+fit.knn <- train(Dtraining, Conditrain$Class, method="knn", metric=metric, 
+                 trControl=control)
+# c) advanced algorithms
+# SVM
+fit.svm <- train(Dtraining, Conditrain$Class, method="svmRadial", metric=metric,
+                 trControl=control)
+# Random Forest
+fit.rf <- train(Dtraining, Conditrain$Class, method="rf", metric=metric, 
+                trControl=control)
+
+#summarize accuracy of models
+results <- resamples(list(lda=fit.lda,cart=fit.cart,svm=fit.svm,
+                          knn=fit.knn,rf=fit.rf,rf=fit.rf))
+summary(results)
+
+# compare accuracy of models
+dotplot(results)
+
+#RANKING FOR ALGORITHM
+
+#ALGORITHM SELECTED
+#model=fit.knn
+#kalgoritmo="knn"
+#model=fit.svm
+#kalgoritmo="svmRadial"
+model=fit.rf
+kalgoritmo="rf"
+
+importance <- varImp(model, scale=TRUE)
+# head(importance)
+
+#Graph importance
+plot(importance, main = paste("All variables with algorithm", kalgoritmo))
+
+#INDEX
+IndexRank <-data.frame(sort(importance$importance$Overall, 
+                            index.return = TRUE, decreasing = TRUE)[2])
+#For SMV y KNN importance$importance$Control, For RF/cart use $Overall
+#IndexRank <-data.frame(sort(importance$importance$Yes, 
+# index.return = TRUE, decreasing = TRUE)[2])
+Ranking<-t(IndexRank)
+
+DtrainingRanked<-Dtraining[,Ranking[1,]]
+DtestingRanked<-Dtesting[,Ranking[1,]]
+
+DataRanked<-Data[,Ranking[1,]]
+# write.csv(DataRanked, "All_data_ranked.csv")
+
+#EVALUATION OF DIF SUBSET OF TOP GENES
+#Number of top genes to evaluate
+kvalue=20
+
+  
+kEvaluacion<-matrix(,nrow=kvalue, ncol=19) # 18 parameters and 1 extra
+colnames(kEvaluacion)<-c("Accuracy","Kappa","AccuracyLower",
+                         "AccuracyUpper","AccuracyNull", "AccuracyPValue", 
+                         "McnemarPValue", "Sensitivity", "Specificity", 
+                         "Pos Pred Value", "Neg Pred Value", "Precision",
+                         "Recall","F1","Prevalence" ,"Detection Rate",
+                         "Detection Prevalence","Balanced Accuracy", "K")
+
+# For k=1 it is calculated separately as it transforms data frame to vector
+k=1 #  
+DtrainK<-as.data.frame(DtrainingRanked[,1])
+colnames(DtrainK)<-colnames(DtrainingRanked)[1]
+DtestK<-as.data.frame(DtestingRanked[,1])
+colnames(DtestK)<-colnames(DtestingRanked)[1]
+
+fit.algorK <- train(DtrainK, Conditrain$Class, method=kalgoritmo, metric=metric,
+                    trControl=control)
+predictionsK <- predict(fit.algorK, DtestK)
+StatisticsK<-confusionMatrix(predictionsK, Conditesting$Class)
+kEvaluacion[1,1:18]<-t(as.data.frame(c(StatisticsK$overall,StatisticsK$byClass)))
+
+
+for (k in 2:kvalue){
+  #k=2
+  DtrainK<-DtrainingRanked[,c(1:k)]
+  DtestK<-DtestingRanked[,c(1:k)]
+  fit.algorK <- train(DtrainK, Conditrain$Class, method=kalgoritmo, metric=metric,
+                      trControl=control)
+  predictionsK <- predict(fit.algorK, DtestK)
+  StatisticsK<-confusionMatrix(predictionsK, Conditesting$Class)
+  kEvaluacion[k,1:18]<-t(as.data.frame(c(StatisticsK$overall,StatisticsK$byClass)))
+  #if not adding extra columns you can use kEvaluacion[k,]<-t(as.data.frame(c(StatisticsK$overall,StatisticsK$byClass)))
+}
+
+EvalK<-as.data.frame(kEvaluacion)
+
+par(mfrow = c(1,1))
+plot(EvalK$Accuracy,type="o",pch=1,col="green", 
+     main = paste("Evaluation by ranked genes with algorithm",
+                  kalgoritmo,sed=""),xlab = "Top genes",
+     ylab = "Metrics", ylim=c(0,1))
+lines(EvalK$F1,type = "o", pch=2, col="blue")
+lines(EvalK$Kappa,type = "o", pch=3, col="red")
+legend("bottomright",legend=c("Accuracy","F1","Kappa"),pch=c(1,2,3),
+       col=c("green","blue","red"))
+
+#for value of K chosen:
+ks=5
+DtrainKS<-DtrainingRanked[,c(1:ks)]
+DtestKS<-DtestingRanked[,c(1:ks)]
+
+DataRankedtopK<-DataRanked[,c(1:ks)]
+# write.csv(DataRankedtopK, paste0("DataRankedtop",ks,"-",kalgoritmo,".csv"))
+
+fit.algorKS <- train(DtrainKS, Conditrain$Class, method=kalgoritmo, metric=metric,
+                     trControl=control)
+importance <- varImp(fit.algorKS, scale=TRUE) 
+plot(importance, main = paste('Top ', ks, "genes with algorithm", kalgoritmo))
+
+predictionsKS <- predict(fit.algorKS, DtestKS)
+StatisticsKS<-confusionMatrix(predictionsKS, Conditesting$Class)
+
+xR <- DtrainKS
+yR <- Conditrain$Class
+sxR <- DtrainingRanked[,c(3,4,1,2)]
+#Here you can rerun particular parameter
+
+#boxplot
+par(mfrow=c(2,2))
+
+for(i in 1:4) {
+  boxplot(xR[,i]~y, main=names(xR)[i],col=c("lightcoral","cyan3"),ylab = " ")
+}
+
+par(mfrow=c(1,1))
+
+
+pca<-prcomp(DataRanked[,1:ks])
+autoplot(pca, data = conditions, colour = 'Class', 
+         main =paste("PCA for top",ks, "variables"))
+autoplot(pca, data = conditions, colour = 'Health', 
+         main =paste("PCA for top",ks, "variables"))
+autoplot(pca, data = conditions, colour = 'Sex', 
+         main =paste("PCA for top",ks, "variables"))
+autoplot(pca, data = conditions, colour = 'Source', 
+         main =paste("PCA for top",ks, "variables"))
+autoplot(pca, data = conditions, colour = 'Age', 
+         main =paste("PCA for top",ks, "variables"))
+
+#PREDICTION
+#FOR SVM, use:
+#control <- trainControl(method="cv", number=10, classProbs=TRUE) 
+
+#fit.algorKS <- train(Class~., data=DtrainKS, method=kalgoritmo, metric=metric,
+# trControl=control)
+# ------------------------------------------------------------------------------
+predictionsKSroc<- predict(fit.algorKS, DtestKS,type = "prob")[,2] #prob. clase=yes
+predict.rocr  <- prediction (predictionsKSroc,Conditesting$Class)
+perf.rocr     <- performance(predict.rocr,"tpr","fpr") #True/False positive.rate
+
+# ROC FIGURE
+# ------------------------------------------------------------------------------
+auc <- as.numeric(performance(predict.rocr ,"auc")@y.values)
+# auc
+par(mfrow = c(1,1))
+plot(perf.rocr,type='o', col = "red", 
+     main = paste("Method:", kalgoritmo, "for top", ks), ylim=c(0,1.01),xlim=c(0,1))  
+abline(a=0, b=1)
+legend("bottomright",legend= paste('AUC for', kalgoritmo, ' = ', round(auc,2)))
+
+#COMPARISON CASE by BASE of test set
+PRED<-as.data.frame(c(predictionsKS))
+PRED2<-as.data.frame(c(Conditesting$Class))
+juntos<-as.data.frame(c(PRED,PRED2))
+
+#Extraction of lists
+ListaVariablestop<-as.data.frame(colnames(DtrainKS))
+# write.csv(ListaVariablestop, file=paste(kalgoritmo,"Lista_all_variables.csv"))
+
+#Extraction of lists
+ListaVariablesall<-as.data.frame(colnames(DtrainingRanked))
+# write.csv(ListaVariablesall, file=paste(kalgoritmo,"Lista_all_variables.csv"))
+
+
+
+```
+# Analysis of CBC
+```{r model stricture based on complete blood counts, results="hide", warning=FALSE}
+Data <- minmax(str_cbc)
+conditions <- str_meta_cbc
+
+##01_PCA - Class (Yes = Stricture and No = non-stricture)
+pca<-prcomp(Data)
+autoplot(pca, data = conditions, colour = 'Class', main ="PCA for all data")
+
+## sub-PCA plots using metadata 
+## 01-1_PCA - Age
+autoplot(pca, data = conditions, colour = 'Age', main ="PCA for all data")
+
+## 01-2_PCA - Sex
+autoplot(pca, data = conditions, colour = 'Sex', main ="PCA for all data")
+
+## 01-3_PCA - Source
+autoplot(pca, data = conditions, colour = 'Source', main ="PCA for all data")
+
+# Split the data into training (80%) and testing (20%) sets
+set.seed(3)
+test_index<-createDataPartition(conditions$Class, p=0.80, list = FALSE)
+
+#Using D training to select features and then tested on Dtesting 
+Dtraining <- Data[test_index, ]
+Dtesting<- Data[-test_index,]
+
+Conditrain<-conditions[test_index, ]
+Conditesting<-conditions[-test_index,]
+
+#03_distribution of data by class in entire dataset, training set and testing set
+par(mfrow=c(1,3))
+
+group1<-conditions$Class
+conteos1 <- table(group1)
+barplot(conteos1, main="Total data",
+        xlab="Disease", col=c("lightcoral","cyan3"))
+        #, legend = c("No","Yes"))
+
+group2<-Conditrain$Class
+conteos2 <- table(group2)
+barplot(conteos2, main="Training data",
+        xlab="Disease", col=c("lightcoral","cyan3"))
+
+
+group3<-Conditesting$Class
+conteos3 <- table(group3)
+barplot(conteos3, main="Testing data",
+        xlab="Disease", col=c("lightcoral","cyan3"))
+
+
+par(mfrow=c(1,1))
+
+# Distribution in training set
+percentage <- prop.table(table(Conditrain$Class)) * 100
+# cbind(freq=table(Conditrain$Class), percentage=percentage)
+
+#Distribution in testing set
+percentage2 <- prop.table(table(Conditesting$Class))*100
+# cbind(freq=table(Conditesting$Class),percentage=percentage2)
+
+# PART 2. DISTRIBUTION OF VARIABLES BY CLASS
+# Performed on training data but could be done on entire set or testing set
+# split input and output
+x <- Dtraining
+y <- Conditrain$Class # class
+sx <- Dtraining[,c(1:6)]
+
+#ALGORITHMS
+
+# Run algorithms using 10-fold cross validation
+control <- trainControl(method="cv", number=10, classProbs=TRUE)
+metric <- "Accuracy"
+
+#Clasification algorithms
+# a) linear algorithms
+fit.lda <- train(Dtraining, Conditrain$Class, method="lda", metric=metric, 
+                 trControl=control)
+# b) nonlinear algorithms
+# CART
+fit.cart <- train(Dtraining, Conditrain$Class, method="rpart", metric=metric,
+                  trControl=control)
+# kNN
+fit.knn <- train(Dtraining, Conditrain$Class, method="knn", metric=metric, 
+                 trControl=control)
+# c) advanced algorithms
+# SVM
+fit.svm <- train(Dtraining, Conditrain$Class, method="svmRadial", metric=metric,
+                 trControl=control)
+# Random Forest
+fit.rf <- train(Dtraining, Conditrain$Class, method="rf", metric=metric, 
+                trControl=control)
+
+#summarize accuracy of models
+results <- resamples(list(lda=fit.lda,cart=fit.cart,svm=fit.svm,
+                          knn=fit.knn,rf=fit.rf,rf=fit.rf))
+summary(results)
+
+# compare accuracy of models
+dotplot(results)
+
+#RANKING ALGORITHM
+
+#ALGORITHMO SELECTION
+#model=fit.knn
+#kalgoritmo="knn"
+#model=fit.svm
+#kalgoritmo="svmRadial"
+model=fit.rf
+kalgoritmo="rf"
+
+importance <- varImp(model, scale=TRUE)
+# head(importance)
+
+#Graph importance
+plot(importance, main = paste("All variables with algorithm", kalgoritmo))
+
+#INDEX
+IndexRank <-data.frame(sort(importance$importance$Overall, 
+                            index.return = TRUE, decreasing = TRUE)[2])
+#For SMV y KNN importance$importance$Control, para RF/cart usar $Overall 
+Ranking<-t(IndexRank)
+
+DtrainingRanked<-Dtraining[,Ranking[1,]]
+DtestingRanked<-Dtesting[,Ranking[1,]]
+
+DataRanked<-Data[,Ranking[1,]]
+# write.csv(DataRanked, "All_data_ranked.csv")
+
+#EVALUATION OF DIF SUBSET OF GENES TOP
+#Numero de genes top a evaluar
+kvalue=20
+
+  
+kEvaluacion<-matrix(,nrow=kvalue, ncol=19) # 18 parametros and one extra for other measurements
+colnames(kEvaluacion)<-c("Accuracy","Kappa","AccuracyLower",
+                         "AccuracyUpper","AccuracyNull", "AccuracyPValue",
+                         "McnemarPValue", "Sensitivity", "Specificity", 
+                         "Pos Pred Value", "Neg Pred Value", "Precision",
+                         "Recall","F1","Prevalence" ,"Detection Rate",
+                         "Detection Prevalence","Balanced Accuracy", "K")
+
+# for k=1 this is done separately as it would transform into vector
+k=1 
+DtrainK<-as.data.frame(DtrainingRanked[,1])
+colnames(DtrainK)<-colnames(DtrainingRanked)[1]
+DtestK<-as.data.frame(DtestingRanked[,1])
+colnames(DtestK)<-colnames(DtestingRanked)[1]
+
+fit.algorK <- train(DtrainK, Conditrain$Class, method=kalgoritmo, metric=metric,
+                    trControl=control)
+predictionsK <- predict(fit.algorK, DtestK)
+StatisticsK<-confusionMatrix(predictionsK, Conditesting$Class)
+kEvaluacion[1,1:18]<-t(as.data.frame(c(StatisticsK$overall,StatisticsK$byClass)))
+
+
+for (k in 2:kvalue){
+  #k=2
+  DtrainK<-DtrainingRanked[,c(1:k)]
+  DtestK<-DtestingRanked[,c(1:k)]
+  fit.algorK <- train(DtrainK, Conditrain$Class, method=kalgoritmo, metric=metric,
+                      trControl=control)
+  predictionsK <- predict(fit.algorK, DtestK)
+  StatisticsK<-confusionMatrix(predictionsK, Conditesting$Class)
+  kEvaluacion[k,1:18]<-t(as.data.frame(c(StatisticsK$overall,StatisticsK$byClass)))
+  #not adding more columns
+  #kEvaluacion[k,]<-t(as.data.frame(c(StatisticsK$overall,StatisticsK$byClass)))
+}
+
+EvalK<-as.data.frame(kEvaluacion)
+
+par(mfrow = c(1,1))
+plot(EvalK$Accuracy,type="o",pch=1,col="green",
+     main = paste("Evaluation by ranked genes with algorithm",
+                  kalgoritmo,sed=""),xlab = "Top genes",
+                  ylab = "Metrics", ylim=c(0,1))
+lines(EvalK$F1,type = "o", pch=2, col="blue")
+lines(EvalK$Kappa,type = "o", pch=3, col="red")
+legend("bottomright",legend=c("Accuracy","F1","Kappa"),
+       pch=c(1,2,3),col=c("green","blue","red"))
+
+#for chosen value of k parameters:
+ks=4
+DtrainKS<-DtrainingRanked[,c(1:ks)]
+DtestKS<-DtestingRanked[,c(1:ks)]
+
+DataRankedtopK<-DataRanked[,c(1:ks)]
+# write.csv(DataRankedtopK, paste0("DataRankedtop",ks,"-",kalgoritmo,".csv"))
+
+fit.algorKS <- train(DtrainKS, Conditrain$Class, method=kalgoritmo, metric=metric,
+                     trControl=control)
+importance <- varImp(fit.algorKS, scale=TRUE) 
+plot(importance, main = paste('Top ', ks, "genes with algorithm", kalgoritmo))
+
+predictionsKS <- predict(fit.algorKS, DtestKS)
+StatisticsKS<-confusionMatrix(predictionsKS, Conditesting$Class)
+
+xR <- DtrainKS
+yR <- Conditrain$Class
+sxR <- DtrainingRanked[,c(3,4,1,2)]
+#you can rerun specific parameters here
+
+#boxplot
+par(mfrow=c(2,2))
+
+for(i in 1:4) {
+  boxplot(xR[,i]~y, main=names(xR)[i],col=c("lightcoral","cyan3"),ylab = " ")
+}
+
+par(mfrow=c(1,1))
+
+
+pca<-prcomp(DataRanked[,1:ks])
+autoplot(pca, data = conditions, colour = 'Class', 
+         main =paste("PCA for top",ks, "variables"))
+autoplot(pca, data = conditions, colour = 'Health', 
+         main =paste("PCA for top",ks, "variables"))
+autoplot(pca, data = conditions, colour = 'Sex', 
+         main =paste("PCA for top",ks, "variables"))
+autoplot(pca, data = conditions, colour = 'Source', 
+         main =paste("PCA for top",ks, "variables"))
+autoplot(pca, data = conditions, colour = 'Age', 
+         main =paste("PCA for top",ks, "variables"))
+
+#PREDICTION
+#FOR SVM, use:
+#control <- trainControl(method="cv", number=10, classProbs=TRUE) 
+
+#fit.algorKS <- train(Class~., data=DtrainKS, method=kalgoritmo, metric=metric, trControl=control)
+# ------------------------------------------------------------------------------
+predictionsKSroc<- predict(fit.algorKS, DtestKS,type = "prob")[,2] #prob. clase=yes
+predict.rocr  <- prediction (predictionsKSroc,Conditesting$Class)
+perf.rocr     <- performance(predict.rocr,"tpr","fpr") #True/False positive.rate
+
+# FIGURE ROC CURVE
+# ------------------------------------------------------------------------------
+auc <- as.numeric(performance(predict.rocr ,"auc")@y.values)
+# auc
+par(mfrow = c(1,1))
+plot(perf.rocr,type='o', col = "red",
+     main = paste("Method:", kalgoritmo, "for top", ks), 
+     ylim=c(0,1.01),xlim=c(0,1))  
+abline(a=0, b=1)
+legend("bottomright",legend= paste('AUC for', kalgoritmo, ' = ', round(auc,2)))
+
+#COMPARISON CASE BY CASE OF TESTING SET
+PRED<-as.data.frame(c(predictionsKS))
+PRED2<-as.data.frame(c(Conditesting$Class))
+juntos<-as.data.frame(c(PRED,PRED2))
+
+#Extraction of lists
+ListaVariablestop<-as.data.frame(colnames(DtrainKS))
+# write.csv(ListaVariablestop, file=paste(kalgoritmo,"Lista_top_variables.csv"))
+
+#Extraction of lists
+ListaVariablesall<-as.data.frame(colnames(DtrainingRanked))
+# write.csv(ListaVariablesall, file=paste(kalgoritmo,"Lista_all_variables.csv"))
+
+
+
+```
+

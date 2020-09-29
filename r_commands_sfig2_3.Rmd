@@ -1,0 +1,230 @@
+---
+title: "Common Marmoset Gut Microbiome Profiles in Health and Intestinal Disease"
+author: "Alex Sheh and Jose Molina Mora"
+date: "September 21, 2020"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Loading R data file to generate Supplemental Figures 2&3. 
+Includes the following data:
+*Supplemental figure 2a-d - PCA plots of microbiome data of healthy marmosets
+*Supplemental figure 3a - Comparison of multiple algorithms
+*Supplemental figure 3b - Evaluating stability by adding more ASVs
+*Supplemental figure 3c - Box and whisker plots for top 10 ASVs
+*Supplemental figure 3d - heatmap of microbiome data using top 10 ASVs selected by RF
+
+```{r data}
+load("sfig23_data.RData")
+```
+
+
+```{r libraries}
+# for ML algorithms
+library(caret)
+library(ROCR)    
+library(rpart)   
+library(rattle)  
+library(ellipse)
+library(ggfortify)
+library(plotrix)
+library(gcrma)
+library(RColorBrewer)
+library(kmed)
+library(DescTools)
+
+sessionInfo()
+
+```
+# Supplemental Figure 2a-d - healthy
+Uses different metadata to visualize healthy microbiome data
+
+```{r ordination for healthy, results="hide", warning=FALSE}
+#boxcox to eliminate arch effect
+Data <- BoxCox(hlt_otu,0.5)
+conditions <- hlt_meta
+pca<-prcomp(Data)
+autoplot(pca, data = conditions, colour = 'Source', main ="PCA for all data")
+autoplot(pca, data = conditions, colour = 'Tissue', main ="PCA for all data")
+autoplot(pca, data = conditions, colour = 'Age_at_sampling', main ="PCA for all data")
+autoplot(pca, data = conditions, colour = 'Sex', main ="PCA for all data")
+```
+# Supplemental Figure 3
+```{r ml algorithm, results="hide", warning=FALSE}
+
+set.seed(2)
+test_index<-createDataPartition(conditions$Source, p=0.80, list = FALSE)
+Dtraining <- Data[test_index, ]
+Dtesting<- Data[-test_index,]
+Conditrain<-conditions[test_index, ]
+Conditesting<-conditions[-test_index,]
+  
+percentage <- prop.table(table(Conditrain$Source)) * 100
+percentage2 <- prop.table(table(Conditesting$Source))*100
+# Run algorithms using 10-fold cross validation
+control <- trainControl(method="cv", number=10, classProbs=TRUE)
+metric <- "Accuracy"
+
+#Clasification algorithms
+# a) linear algorithms
+#fit.lda <- train(Dtraining, Conditrain$Source, method="lda", 
+#metric=metric, trControl=control)
+# b) nonlinear algorithms
+# CART
+fit.cart <- train(Dtraining, Conditrain$Source, method="rpart", metric=metric, 
+                  trControl=control)
+# kNN
+fit.knn <- train(Dtraining, Conditrain$Source, method="knn", metric=metric, 
+                 trControl=control)
+# c) advanced algorithms
+# SVM
+fit.svm <- train(Dtraining, Conditrain$Source, method="svmRadial", metric=metric, 
+                 trControl=control)
+# Random Forest
+fit.rf <- train(Dtraining, Conditrain$Source, method="rf", metric=metric, 
+                trControl=control)
+
+#summarize accuracy of models
+results <- resamples(list(cart=fit.cart,svm=fit.svm,knn=fit.knn,rf=fit.rf,rf=fit.rf))
+# summary(results)
+```
+# Supplemental Figure 3a
+```{r comparison algorithms}
+# compare accuracy of models
+dotplot(results)
+```
+
+```{r compute accuracy, results="hide", warning=FALSE}
+#ALGORITMO SELECCIONADO
+#model=fit.knn
+#kalgoritmo="knn"
+#model=fit.svm
+#kalgoritmo="svmRadial"
+model=fit.rf
+kalgoritmo="rf"
+
+importance <- varImp(model, scale=TRUE)
+# head(importance)
+# plot(importance, main = paste("All variables with algorithm", kalgoritmo))
+
+#INDEX
+IndexRank <-data.frame(sort(importance$importance$Overall, 
+                            index.return = TRUE, decreasing = TRUE)[2])
+Ranking<-t(IndexRank)
+DtrainingRanked<-Dtraining[,Ranking[1,]]
+DtestingRanked<-Dtesting[,Ranking[1,]]
+DataRanked<-Data[,Ranking[1,]]
+
+#EVALUACION DE DIF SUBSET DE variables TOP
+kvalue=80
+
+kEvaluacion<-matrix(,nrow=kvalue, ncol=52) 
+colnames(kEvaluacion)<-c("Accuracy","Kappa","AccuracyLower","AccuracyUpper",
+                         "AccuracyNull", "AccuracyPValue","McnemarPValue",
+                         "Sensitivity_B", "Specificity_B", "Pos Pred Value_B", 
+                         "Neg Pred Value_B", "Precision_B", "Recall_B","F1_B",
+                         "Prevalence" ,"Detection Rate_B","Detection Prevalence_B",
+                         "Balanced Accuracy_B", "Sensitivity_C", "Specificity_C", 
+                         "Pos Pred Value_C", "Neg Pred Value_C", "Precision_C", 
+                         "Recall_C","F1_C","Prevalence" ,"Detection Rate_C",
+                         "Detection Prevalence_C","Balanced Accuracy_C",
+                         "Sensitivity_E", "Specificity_E", "Pos Pred Value_E", 
+                         "Neg Pred Value_E", "Precision_E", "Recall_E","F1_E",
+                         "Prevalence" ,"Detection Rate_E","Detection Prevalence_E",
+                         "Balanced Accuracy_E", "Sensitivity_N", "Specificity_N", 
+                         "Pos Pred Value_N", "Neg Pred Value_N", "Precision_N",  
+                         "Recall_N","F1_N","Prevalence" ,"Detection Rate_N",
+                         "Detection Prevalence_N","Balanced Accuracy_N", "K")
+k=1 
+DtrainK<-as.data.frame(DtrainingRanked[,1])
+colnames(DtrainK)<-colnames(DtrainingRanked)[1]
+DtestK<-as.data.frame(DtestingRanked[,1])
+colnames(DtestK)<-colnames(DtestingRanked)[1]
+
+fit.algorK <- train(DtrainK, Conditrain$Source, method=kalgoritmo, metric=metric,
+                    trControl=control)
+predictionsK <- predict(fit.algorK, DtestK)
+StatisticsK<-confusionMatrix(predictionsK, Conditesting$Source)
+kEvaluacion[1,1:51]<-t(as.data.frame(c(StatisticsK$overall,StatisticsK$byClass[1,],                                    StatisticsK$byClass[2,],StatisticsK$byClass[3,],
+                                       StatisticsK$byClass[4,])))
+
+for (k in 2:kvalue){  
+  DtrainK<-DtrainingRanked[,c(1:k)]
+  DtestK<-DtestingRanked[,c(1:k)]
+  fit.algorK <- train(DtrainK, Conditrain$Source, method=kalgoritmo, metric=metric,
+                      trControl=control)
+  predictionsK <- predict(fit.algorK, DtestK)
+  StatisticsK<-confusionMatrix(predictionsK, Conditesting$Source)
+  kEvaluacion[k,1:51]<-t(as.data.frame(c(StatisticsK$overall,StatisticsK$byClass[1,],
+                        StatisticsK$byClass[2,],StatisticsK$byClass[3,],
+                        StatisticsK$byClass[4,])))
+
+}
+
+EvalK<-as.data.frame(kEvaluacion)
+```
+# Supplemental Figure 3b
+
+```{r Supplemental Figure 3b}
+par(mfrow = c(1,1))
+plot(EvalK$Accuracy,type="o",pch=1,col="green",
+     main = paste("Evaluation by ranked variables with algorithm",kalgoritmo,sed=""),
+     xlab = "Top variables",ylab = "Metrics", ylim=c(0,1))
+lines(EvalK$Kappa,type = "o", pch=3, col="red")
+legend("bottomright",legend=c("Accuracy","Kappa"),pch=c(1,2,3),col=c("green","red"))
+```
+## Boxplots of top bacteria
+
+```{r evaluate top variables, results="hide", warning=FALSE}
+ks=10
+DtrainKS<-DtrainingRanked[,c(1:ks)]
+DtestKS<-DtestingRanked[,c(1:ks)]
+
+DataRankedtopK<-DataRanked[,c(1:ks)]
+
+set.seed(3)
+fit.algorKS <- train(DtrainKS, Conditrain$Source, method=kalgoritmo, metric=metric,
+                     trControl=control)
+importance <- varImp(fit.algorKS, scale=TRUE) 
+# plot(importance, main = paste('Top ', ks, "variables with algorithm", kalgoritmo))
+
+predictionsKS <- predict(fit.algorKS, DtestKS)
+StatisticsKS<-confusionMatrix(predictionsKS, Conditesting$Source)
+
+xR <- DtrainKS
+yR <- Conditrain$Source
+sxR <- DtrainingRanked[,c(6,7,8,9,10,1,2,3,4,5)]
+
+#boxplot
+par(mfrow=c(2,5))
+
+for(i in 1:10) {
+  boxplot(xR[,i]~yR, main=names(xR)[i],
+          col=c("lightcoral","cyan3","darkgreen","darkorange"),ylab = " ")
+}
+title(paste("Top 10 variables with algorithm", kalgoritmo), outer=TRUE) 
+
+par(mfrow=c(1,1))
+```
+# Supplemental Figure 3c
+
+```{r Supplemental Figure 3c}
+# box and whisker plots for each attribute
+featurePlot(x=sxR, y=yR, plot="box", 
+            main = paste("Top 10 variables with algorithm", kalgoritmo),
+            col=c("lightcoral","cyan3","darkgreen","darkorange"))
+
+```
+# Supplemental Figure 3d
+
+```{r heatmap}
+
+heatmap(as.matrix(t(DataRanked[,1:ks])), scale="column", col = brewer.pal(11,"Spectral"),
+        ColSideColors=paste(as.numeric(conditions$Source)+1),,labCol = FALSE)
+
+```
